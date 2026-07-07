@@ -1,0 +1,3438 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>Agenda da Rede</title>
+<script src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
+<script src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
+<script src="https://unpkg.com/react-is@18/umd/react-is.production.min.js"></script>
+<script src="https://unpkg.com/prop-types/prop-types.min.js"></script>
+<script src="https://unpkg.com/recharts@2/umd/Recharts.js"></script>
+<script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+<style>
+  html, body { margin: 0; padding: 0; background: #F6F3EC; font-family: sans-serif; }
+  #root { min-height: 100vh; box-sizing: border-box; padding: 16px; }
+  #boot-error { display:none; max-width: 640px; margin: 40px auto; padding: 20px; border: 1px solid #A63A32; background: #F3E1DE; border-radius: 6px; color: #24272B; font-family: sans-serif; }
+</style>
+</head>
+<body>
+<div id="root">
+  <div style="max-width:640px;margin:60px auto;text-align:center;color:#8a8578;font-family:sans-serif;">Carregando o sistema…</div>
+</div>
+<div id="boot-error"></div>
+
+<script>
+// ---- Armazenamento local (substitui o armazenamento do artifact do Claude) ----
+// Guarda tudo no localStorage do navegador deste computador/dispositivo.
+window.storage = {
+  get: function (key, shared) {
+    return new Promise(function (resolve, reject) {
+      var fullKey = (shared ? "shared:" : "personal:") + key;
+      var raw = localStorage.getItem(fullKey);
+      if (raw === null) { reject(new Error("Chave não encontrada: " + key)); return; }
+      resolve({ key: key, value: raw, shared: !!shared });
+    });
+  },
+  set: function (key, value, shared) {
+    return new Promise(function (resolve, reject) {
+      try {
+        var fullKey = (shared ? "shared:" : "personal:") + key;
+        localStorage.setItem(fullKey, value);
+        resolve({ key: key, value: value, shared: !!shared });
+      } catch (e) { reject(e); }
+    });
+  },
+  delete: function (key, shared) {
+    return new Promise(function (resolve) {
+      var fullKey = (shared ? "shared:" : "personal:") + key;
+      localStorage.removeItem(fullKey);
+      resolve({ key: key, deleted: true, shared: !!shared });
+    });
+  },
+  list: function (prefix, shared) {
+    return new Promise(function (resolve) {
+      var pfx = (shared ? "shared:" : "personal:") + (prefix || "");
+      var keys = [];
+      for (var i = 0; i < localStorage.length; i++) {
+        var k = localStorage.key(i);
+        if (k && k.indexOf(pfx) === 0) keys.push(k.slice((shared ? "shared:" : "personal:").length));
+      }
+      resolve({ keys: keys, prefix: prefix, shared: !!shared });
+    });
+  }
+};
+
+window.addEventListener("error", function (e) {
+  var box = document.getElementById("boot-error");
+  box.style.display = "block";
+  box.innerHTML = "<strong>Erro ao carregar:</strong> " + (e.message || "erro desconhecido") +
+    "<br><span style='font-size:12px;color:#7a2c26;'>Verifique sua conexão com a internet — este arquivo carrega React e outras bibliotecas de um CDN público na primeira vez que é aberto.</span>";
+});
+</script>
+
+<script type="text/babel" data-presets="react">
+const { useState, useEffect, useMemo, useRef } = React;
+const { LineChart, Line, BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, PieChart, Pie, Cell } = Recharts;
+
+
+const MONTHS = ["Jan", "Fev", "Mar", "Abr", "Mai", "Jun", "Jul", "Ago", "Set", "Out", "Nov", "Dez"];
+
+const FONT_STYLE = `
+@import url('https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,400;9..144,600;9..144,700&family=Inter:wght@400;500;600;700&family=IBM+Plex+Mono:wght@400;500;600&display=swap');
+
+.orgapp {
+  --paper: #F6F3EC;
+  --surface: #FFFFFF;
+  --ink: #23262B;
+  --navy: #1B2A4A;
+  --navy-soft: #2C3E63;
+  --gold: #B8892B;
+  --gold-soft: #E7D9B8;
+  --green: #2F6D46;
+  --green-soft: #E3EFE4;
+  --red: #A63A32;
+  --red-soft: #F3E1DE;
+  --line: #E4DFD2;
+  font-family: 'Inter', sans-serif;
+  color: var(--ink);
+  background: var(--paper);
+}
+.orgapp .disp { font-family: 'Fraunces', serif; }
+.orgapp .mono { font-family: 'IBM Plex Mono', monospace; }
+.orgapp .card {
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: 4px;
+}
+.orgapp .btn-primary {
+  background: var(--navy);
+  color: #fff;
+  border-radius: 3px;
+  font-weight: 600;
+  transition: background .15s ease;
+}
+.orgapp .btn-primary:hover { background: var(--navy-soft); }
+.orgapp .btn-gold {
+  background: var(--gold);
+  color: #fff;
+  border-radius: 3px;
+  font-weight: 600;
+}
+.orgapp .btn-gold:hover { filter: brightness(1.06); }
+.orgapp .tab {
+  border-left: 3px solid transparent;
+  transition: all .15s ease;
+}
+.orgapp .tab.active {
+  border-left-color: var(--gold);
+  background: rgba(184,137,43,0.09);
+  color: var(--navy);
+  font-weight: 600;
+}
+.orgapp .tab:hover:not(.active) { background: rgba(0,0,0,0.03); }
+.orgapp .daycell {
+  border: 1px solid var(--line);
+  background: var(--surface);
+  min-height: 78px;
+  transition: box-shadow .15s ease;
+}
+.orgapp .daycell:hover { box-shadow: inset 0 0 0 1.5px var(--gold); cursor: pointer; }
+.orgapp .daycell.today { border-left: 3px solid var(--gold); }
+.orgapp .dot { width: 6px; height: 6px; border-radius: 50%; display: inline-block; }
+.orgapp .badge-company { background: var(--gold-soft); color: #6b4f14; }
+.orgapp .badge-personal { background: #EAEEF4; color: var(--navy); }
+.orgapp .input {
+  border: 1px solid var(--line);
+  border-radius: 3px;
+  padding: 6px 9px;
+  background: #fff;
+  font-size: 14px;
+}
+.orgapp .input:focus { outline: 2px solid var(--gold-soft); border-color: var(--gold); }
+.orgapp ::-webkit-scrollbar { width: 8px; height: 8px; }
+.orgapp ::-webkit-scrollbar-thumb { background: var(--line); border-radius: 4px; }
+@media print {
+  body * { visibility: hidden; }
+  .print-area, .print-area * { visibility: visible !important; }
+  .print-area { position: absolute; left: 0; top: 0; width: 100%; box-shadow: none !important; }
+  .no-print { display: none !important; }
+}
+`;
+
+const STORAGE_KEY = "org-data-v1";
+const AVATAR_COLORS = ["#B8892B","#1B2A4A","#2F6D46","#A63A32","#6B5B95","#3C7A89"];
+const MAX_UNITS_PER_CLIENT = 8;
+const WEEKDAY_LABELS = ["dom","seg","ter","qua","qui","sex","sáb"];
+const DEFAULT_WORKDAYS = [1, 2, 3, 4, 5];
+
+function uid(prefix = "id") {
+  return prefix + "-" + Math.random().toString(36).slice(2, 9);
+}
+
+function emptyRevenue() { return {}; }
+
+function makeClient(i) {
+  return {
+    id: "client" + i,
+    name: "Cliente " + i,
+    password: "1234",
+    photo: null,
+    status: "",
+    active: true,
+    revenue: emptyRevenue(),
+    activities: [],
+    units: [],
+    metaMensal: null,
+    metaDiaria: null,
+    metaSemanal: null,
+    funcionarios: [],
+    contractStart: null,
+    contractEnd: null,
+    paymentDate: null,
+    paymentDay1: null,
+    paymentDay2: null,
+    payments: {},
+    profiles: [],
+  };
+}
+
+function defaultData() {
+  return {
+    director: { id: "director", name: "Diretor(a)", password: "1234", photo: null, status: "Vendo tudo, cuidando de todos." },
+    employees: [
+      { id: "emp1", name: "Ana Souza", password: "1234", photo: null, status: "Foco total nas metas do mês.", active: true },
+      { id: "emp2", name: "Bruno Lima", password: "1234", photo: null, status: "", active: true },
+      { id: "emp3", name: "Carla Dias", password: "1234", photo: null, status: "", active: true },
+      { id: "emp4", name: "Diego Alves", password: "1234", photo: null, status: "", active: true },
+    ],
+    clients: Array.from({ length: 20 }, (_, i) => makeClient(i + 1)),
+    events: [],
+    networkMetaMensal: {},
+    prospects: [],
+    feedbackMessages: [],
+    financas: {
+      contasPagar: [],
+      contasReceber: [],
+      lancamentos: [],
+      metaFaturamentoFuturo: null,
+    },
+  };
+}
+
+function currentYear() { return new Date().getFullYear(); }
+
+function monthKey(year, monthIdx) { return year + "-" + pad(monthIdx + 1); }
+
+function revenueSeries(revenue, year) {
+  return MONTHS.map((label, idx) => {
+    const key = monthKey(year, idx);
+    const value = revenue[key];
+    return { month: label, key, value: typeof value === "number" ? value : null };
+  });
+}
+
+function growthPct(prev, curr) {
+  if (prev == null || curr == null || prev === 0) return null;
+  return ((curr - prev) / Math.abs(prev)) * 100;
+}
+
+function overallGrowth(series) {
+  const withValues = series.filter(p => p.value != null);
+  if (withValues.length < 2) return null;
+  const first = withValues[0].value;
+  const last = withValues[withValues.length - 1].value;
+  return growthPct(first, last);
+}
+
+function countWorkingDays(year, monthIdx, workDays, uptoDay) {
+  const daysInMonth = new Date(year, monthIdx + 1, 0).getDate();
+  const limit = uptoDay || daysInMonth;
+  let count = 0;
+  for (let d = 1; d <= limit; d++) {
+    const wd = new Date(year, monthIdx, d).getDay();
+    if (workDays.includes(wd)) count++;
+  }
+  return count;
+}
+
+function computeGoalBreakdown(metaMensal, year, monthIdx, workDays) {
+  const wd = workDays && workDays.length ? workDays : DEFAULT_WORKDAYS;
+  const totalWorkingDays = countWorkingDays(year, monthIdx, wd);
+  const firstHalf = countWorkingDays(year, monthIdx, wd, 15);
+  const secondHalf = totalWorkingDays - firstHalf;
+  if (metaMensal == null || totalWorkingDays === 0) {
+    return { diaria: null, semanal: null, quinzenal1: null, quinzenal2: null, totalWorkingDays };
+  }
+  const diaria = metaMensal / totalWorkingDays;
+  return {
+    diaria,
+    semanal: diaria * Math.min(wd.length, 7),
+    quinzenal1: diaria * firstHalf,
+    quinzenal2: diaria * secondHalf,
+    totalWorkingDays,
+  };
+}
+
+function sumSalesForMonth(sales, year, monthIdx) {
+  const prefix = monthKey(year, monthIdx) + "-";
+  return Object.entries(sales || {}).reduce((sum, [k, v]) => (k.startsWith(prefix) && typeof v === "number" ? sum + v : sum), 0);
+}
+
+function sumSalesForDay(sales, dateStr) {
+  return sales && typeof sales[dateStr] === "number" ? sales[dateStr] : 0;
+}
+
+function sumPointsForMonth(pontos, year, monthIdx) {
+  const prefix = monthKey(year, monthIdx);
+  return (pontos || []).filter(p => p.date && p.date.startsWith(prefix)).reduce((s, p) => s + p.value, 0);
+}
+
+function durationHours(timeStart, timeEnd) {
+  if (!timeStart || !timeEnd) return 0;
+  const [h1, m1] = timeStart.split(":").map(Number);
+  const [h2, m2] = timeEnd.split(":").map(Number);
+  let mins = (h2 * 60 + m2) - (h1 * 60 + m1);
+  if (mins < 0) mins += 24 * 60;
+  return mins / 60;
+}
+
+function sumActivityHours(activities, year, monthIdx, filterFn) {
+  const prefix = monthKey(year, monthIdx);
+  return (activities || [])
+    .filter(a => a.date && a.date.startsWith(prefix) && (!filterFn || filterFn(a)))
+    .reduce((s, a) => s + durationHours(a.timeStart, a.timeEnd), 0);
+}
+
+function fmtHours(h) {
+  if (!h) return "0h";
+  const wholeH = Math.floor(h);
+  const mins = Math.round((h - wholeH) * 60);
+  return mins > 0 ? `${wholeH}h${mins}min` : `${wholeH}h`;
+}
+
+function startOfWeek(date) {
+  const d = new Date(date);
+  d.setHours(0, 0, 0, 0);
+  d.setDate(d.getDate() - d.getDay());
+  return d;
+}
+
+function sumSalesForWeek(sales, refDate) {
+  const start = startOfWeek(refDate);
+  let sum = 0;
+  for (let i = 0; i < 7; i++) {
+    const d = new Date(start);
+    d.setDate(start.getDate() + i);
+    sum += sumSalesForDay(sales, toISODate(d));
+  }
+  return sum;
+}
+
+function pctRemaining(total, meta) {
+  if (meta == null || meta === 0) return { pct: null, remaining: null };
+  const pct = (total / meta) * 100;
+  return { pct, remaining: Math.max(meta - total, 0) };
+}
+
+function collectVendedores(client) {
+  const own = client.funcionarios.map(f => ({ ...f, ownerLabel: client.name, clientId: client.id, unitId: null }));
+  const fromUnits = client.units.flatMap(u => u.funcionarios.map(f => ({ ...f, ownerLabel: client.name + " · " + u.name, clientId: client.id, unitId: u.id })));
+  return [...own, ...fromUnits];
+}
+
+function findFuncionarioGlobal(data, funcId) {
+  for (const c of data.clients) {
+    const own = c.funcionarios.find(f => f.id === funcId);
+    if (own) return { func: own, clientId: c.id, unitId: null };
+    for (const u of c.units) {
+      const inUnit = u.funcionarios.find(f => f.id === funcId);
+      if (inUnit) return { func: inUnit, clientId: c.id, unitId: u.id };
+    }
+  }
+  return null;
+}
+
+function findManagerGlobal(data, managerId) {
+  for (const c of data.clients) {
+    for (const u of c.units) {
+      if (u.managerId === managerId) return { unit: u, clientId: c.id, unitId: u.id };
+    }
+  }
+  return null;
+}
+
+function patchFuncionario(clients, clientId, unitId, funcId, patch) {
+  return clients.map(c => {
+    if (c.id !== clientId) return c;
+    if (unitId) {
+      return { ...c, units: c.units.map(u => u.id === unitId ? { ...u, funcionarios: u.funcionarios.map(f => f.id === funcId ? { ...f, ...patch } : f) } : u) };
+    }
+    return { ...c, funcionarios: c.funcionarios.map(f => f.id === funcId ? { ...f, ...patch } : f) };
+  });
+}
+
+function patchUnit(clients, clientId, unitId, patch) {
+  return clients.map(c => c.id === clientId ? { ...c, units: c.units.map(u => u.id === unitId ? { ...u, ...patch } : u) } : c);
+}
+
+function checkThreeDayGoalAlert(funcionario, referenceDate) {
+  if (funcionario.metaMensal == null) return false;
+  const workDays = funcionario.workDays && funcionario.workDays.length ? funcionario.workDays : DEFAULT_WORKDAYS;
+  let d = new Date(referenceDate);
+  let checked = 0, failCount = 0, safety = 0;
+  while (checked < 3 && safety < 45) {
+    if (workDays.includes(d.getDay())) {
+      const key = toISODate(d);
+      const goals = computeGoalBreakdown(funcionario.metaMensal, d.getFullYear(), d.getMonth(), workDays);
+      const val = sumSalesForDay(funcionario.sales, key);
+      if (goals.diaria != null && val < goals.diaria) failCount++;
+      checked++;
+    }
+    d.setDate(d.getDate() - 1);
+    safety++;
+  }
+  return checked === 3 && failCount === 3;
+}
+
+function checkLowPointsAlert(funcionario, referenceDate) {
+  let sum = 0;
+  for (let i = 0; i < 7; i++) {
+    const d = new Date(referenceDate);
+    d.setDate(d.getDate() - i);
+    const key = toISODate(d);
+    sum += (funcionario.pontos || []).filter(p => p.date === key).reduce((s, p) => s + p.value, 0);
+  }
+  return sum <= -5;
+}
+
+function computeAlerts(vendedores) {
+  const today = new Date();
+  const alerts = [];
+  vendedores.forEach(v => {
+    if (checkThreeDayGoalAlert(v, today)) {
+      alerts.push({ id: v.id + "-meta", name: v.name, sub: v.ownerLabel, message: "3 dias seguidos sem bater a meta diária", severity: "red" });
+    }
+    if (checkLowPointsAlert(v, today)) {
+      alerts.push({ id: v.id + "-pontos", name: v.name, sub: v.ownerLabel, message: "pontuação muito baixa nos últimos 7 dias", severity: "red" });
+    }
+  });
+  return alerts;
+}
+
+function fmtBRL(v) {
+  if (v == null) return "—";
+  return v.toLocaleString("pt-BR", { style: "currency", currency: "BRL", maximumFractionDigits: 0 });
+}
+
+function pad(n) { return n < 10 ? "0" + n : "" + n; }
+function toISODate(d) { return d.getFullYear() + "-" + pad(d.getMonth() + 1) + "-" + pad(d.getDate()); }
+function sameDay(a, b) { return toISODate(a) === toISODate(b); }
+function monthLabel(d) {
+  return d.toLocaleDateString("pt-BR", { month: "long", year: "numeric" });
+}
+
+function buildMonthGrid(monthDate) {
+  const year = monthDate.getFullYear();
+  const month = monthDate.getMonth();
+  const first = new Date(year, month, 1);
+  const startWeekday = first.getDay();
+  const daysInMonth = new Date(year, month + 1, 0).getDate();
+  const cells = [];
+  for (let i = 0; i < startWeekday; i++) cells.push(null);
+  for (let d = 1; d <= daysInMonth; d++) cells.push(new Date(year, month, d));
+  while (cells.length % 7 !== 0) cells.push(null);
+  return cells;
+}
+
+function initials(name) {
+  if (!name) return "?";
+  const parts = name.trim().split(/\s+/);
+  return (parts[0]?.[0] || "").toUpperCase() + (parts[1]?.[0] || "").toUpperCase();
+}
+
+function Avatar({ person, size = 36 }) {
+  const color = AVATAR_COLORS[Math.abs(hashCode(person?.id || "x")) % AVATAR_COLORS.length];
+  if (person?.photo) {
+    return <img src={person.photo} alt={person.name} style={{ width: size, height: size, borderRadius: "50%", objectFit: "cover" }} />;
+  }
+  return (
+    <div className="mono" style={{
+      width: size, height: size, borderRadius: "50%", background: color, color: "#fff",
+      display: "flex", alignItems: "center", justifyContent: "center", fontSize: size * 0.38, fontWeight: 600
+    }}>
+      {initials(person?.name)}
+    </div>
+  );
+}
+
+function hashCode(str) {
+  let h = 0;
+  for (let i = 0; i < str.length; i++) { h = (h << 5) - h + str.charCodeAt(i); h |= 0; }
+  return h;
+}
+
+function normalizeData(d) {
+  const base = defaultData();
+  const merged = { ...base, ...(d || {}) };
+  merged.director = { ...base.director, ...(d?.director || {}) };
+  merged.employees = (Array.isArray(d?.employees) && d.employees.length ? d.employees : base.employees)
+    .map(e => ({ photo: null, status: "", active: false, ...e }));
+  const normFunc = f => ({ workDays: DEFAULT_WORKDAYS, metaMensal: null, sales: {}, password: "", pontos: [], ...f });
+  merged.clients = (Array.isArray(d?.clients) && d.clients.length === 20 ? d.clients : base.clients)
+    .map(c => ({ photo: null, status: "", active: true, revenue: {}, activities: [], units: [], metaMensal: null, metaDiaria: null, metaSemanal: null, funcionarios: [], contractStart: null, contractEnd: null, paymentDate: null, paymentDay1: null, paymentDay2: null, payments: {}, profiles: [], ...c }))
+    .map(c => ({
+      ...c,
+      funcionarios: (c.funcionarios || []).map(normFunc),
+      units: (c.units || []).map(u => ({
+        revenue: {}, activities: [], monthlyNotes: {}, managerName: "", metaMensal: null, metaDiaria: null, metaSemanal: null, funcionarios: [],
+        managerId: "mgr-" + u.id, managerPassword: "1234", managerPhoto: null, managerStatus: "", ...u,
+        ...(u.funcionarios ? { funcionarios: u.funcionarios.map(normFunc) } : {}),
+      })),
+    }));
+  merged.events = (Array.isArray(d?.events) ? d.events : []).map(ev => ({ taggedIds: [], taggedClientIds: [], ...ev }));
+  merged.networkMetaMensal = d?.networkMetaMensal || {};
+  merged.prospects = Array.isArray(d?.prospects) ? d.prospects : [];
+  merged.feedbackMessages = Array.isArray(d?.feedbackMessages) ? d.feedbackMessages : [];
+  merged.financas = { contasPagar: [], contasReceber: [], lancamentos: [], metaFaturamentoFuturo: null, ...(d?.financas || {}) };
+  return merged;
+}
+
+function App() {
+  const [loading, setLoading] = useState(true);
+  const [data, setData] = useState(null);
+  const [saveError, setSaveError] = useState("");
+  const [currentUser, setCurrentUser] = useState(null); // {type:'director'} | {type:'employee', id} | {type:'client', id}
+  const [loginSel, setLoginSel] = useState("director");
+  const [loginPass, setLoginPass] = useState("");
+  const [loginError, setLoginError] = useState("");
+  const [view, setView] = useState("company");
+  const [monthDate, setMonthDate] = useState(new Date());
+  const [selectedDay, setSelectedDay] = useState(null);
+  const [modalOpen, setModalOpen] = useState(false);
+  const [modalDefaults, setModalDefaults] = useState(null);
+  const [revealPw, setRevealPw] = useState({});
+
+  useEffect(() => {
+    (async () => {
+      try {
+        const res = await window.storage.get(STORAGE_KEY, true);
+        setData(normalizeData(JSON.parse(res.value)));
+      } catch (e) {
+        const d = defaultData();
+        setData(d);
+        try { await window.storage.set(STORAGE_KEY, JSON.stringify(d), true); } catch (e2) {}
+      }
+      setLoading(false);
+    })();
+  }, []);
+
+  async function persist(next) {
+    setData(next);
+    try {
+      const r = await window.storage.set(STORAGE_KEY, JSON.stringify(next), true);
+      if (!r) setSaveError("Não consegui salvar agora. Tente novamente.");
+      else setSaveError("");
+    } catch (e) {
+      setSaveError("Não consegui salvar agora. Tente novamente.");
+    }
+  }
+
+  const activeEmployees = useMemo(() => (data ? data.employees.filter(e => e.active) : []), [data]);
+
+  function findPerson(idOrDirector) {
+    if (!data) return null;
+    if (idOrDirector === "director") return data.director;
+    return data.employees.find(e => e.id === idOrDirector) || null;
+  }
+
+  function findClient(id) {
+    if (!data) return null;
+    return data.clients.find(c => c.id === id) || null;
+  }
+
+  function handleLogin(e) {
+    e.preventDefault();
+    if (!data) return;
+    let person;
+    if (loginSel === "director") person = data.director;
+    else if (loginSel.startsWith("client")) person = data.clients.find(x => x.id === loginSel);
+    else if (loginSel.startsWith("mgr-")) {
+      const found = findManagerGlobal(data, loginSel);
+      person = found ? { password: found.unit.managerPassword, active: true } : null;
+    }
+    else if (loginSel.startsWith("func-")) person = findFuncionarioGlobal(data, loginSel)?.func;
+    else person = data.employees.find(x => x.id === loginSel);
+    const isValidProfile = person && (loginSel === "director" || person.active !== false);
+    if (!isValidProfile) { setLoginError("Perfil indisponível."); return; }
+    const typedPass = (loginPass || "").trim();
+    const realPass = (person.password || "").trim();
+    if (realPass !== typedPass) { setLoginError("Senha incorreta. Confira se não há espaços extras ou preenchimento automático do navegador."); return; }
+    setLoginError("");
+    setLoginPass("");
+    if (loginSel === "director") {
+      setCurrentUser({ type: "director" });
+      setView("company");
+    } else if (loginSel.startsWith("client")) {
+      setCurrentUser({ type: "client", id: loginSel });
+      setView("client:" + loginSel);
+    } else if (loginSel.startsWith("mgr-")) {
+      const found = findManagerGlobal(data, loginSel);
+      setCurrentUser({ type: "manager", id: loginSel, clientId: found.clientId, unitId: found.unitId });
+      setView("minha-unidade");
+    } else if (loginSel.startsWith("func-")) {
+      const found = findFuncionarioGlobal(data, loginSel);
+      setCurrentUser({ type: "vendedor", id: loginSel, clientId: found.clientId, unitId: found.unitId });
+      setView("vendas");
+    } else {
+      setCurrentUser({ type: "employee", id: loginSel });
+      setView(loginSel);
+    }
+  }
+
+  function handleLogout() {
+    setCurrentUser(null);
+    setView("company");
+    setLoginSel("director");
+  }
+
+  if (loading || !data) {
+    return (
+      <div className="orgapp" style={{ padding: 40, textAlign: "center" }}>
+        <p className="mono" style={{ fontSize: 13, color: "#8a8578" }}>carregando…</p>
+      </div>
+    );
+  }
+
+  if (!currentUser) {
+    return <LoginScreen
+      data={data}
+      loginSel={loginSel} setLoginSel={setLoginSel}
+      loginPass={loginPass} setLoginPass={setLoginPass}
+      loginError={loginError}
+      onSubmit={handleLogin}
+    />;
+  }
+
+  const isDirector = currentUser.type === "director";
+  const isClient = currentUser.type === "client";
+  const isVendedor = currentUser.type === "vendedor";
+  const isManager = currentUser.type === "manager";
+  const vendedorInfo = isVendedor ? findFuncionarioGlobal(data, currentUser.id) : null;
+  const managerInfo = isManager ? findManagerGlobal(data, currentUser.id) : null;
+  const self = isDirector ? data.director
+    : isClient ? findClient(currentUser.id)
+    : isVendedor ? vendedorInfo?.func
+    : isManager ? { id: managerInfo?.unit.managerId, name: managerInfo?.unit.managerName, photo: managerInfo?.unit.managerPhoto, status: managerInfo?.unit.managerStatus }
+    : findPerson(currentUser.id);
+
+  async function updateFuncionarioGlobal(clientId, unitId, funcId, patch) {
+    await persist({ ...data, clients: patchFuncionario(data.clients, clientId, unitId, funcId, patch) });
+  }
+  async function updateUnitGlobal(clientId, unitId, patch) {
+    await persist({ ...data, clients: patchUnit(data.clients, clientId, unitId, patch) });
+  }
+
+  return (
+    <div className="orgapp" style={{ minHeight: 500, display: "flex", borderRadius: 6, overflow: "hidden", border: "1px solid var(--line)" }}>
+      <style>{FONT_STYLE}</style>
+      <Sidebar
+        isDirector={isDirector}
+        isClient={isClient}
+        isVendedor={isVendedor}
+        isManager={isManager}
+        self={self}
+        activeEmployees={activeEmployees}
+        clients={data.clients}
+        view={view} setView={setView}
+        onLogout={handleLogout}
+      />
+      <div style={{ flex: 1, minWidth: 0, padding: 22, overflowY: "auto", maxHeight: 640 }}>
+        {saveError && (
+          <div className="card" style={{ padding: 10, marginBottom: 14, borderColor: "var(--red)", background: "var(--red-soft)", fontSize: 13 }}>
+            {saveError}
+          </div>
+        )}
+        {view === "company" && isDirector && (
+          <AgendaView
+            title="Agenda da Empresa"
+            subtitle="Tudo que envolve a operação. Marque colaboradores e clientes para que o compromisso apareça na agenda deles automaticamente."
+            scope="company"
+            data={data} persist={persist}
+            monthDate={monthDate} setMonthDate={setMonthDate}
+            currentUser={currentUser}
+            selectedDay={selectedDay} setSelectedDay={setSelectedDay}
+            modalOpen={modalOpen} setModalOpen={setModalOpen}
+            modalDefaults={modalDefaults} setModalDefaults={setModalDefaults}
+          />
+        )}
+        {activeEmployees.some(e => e.id === view) && (
+          <AgendaView
+            title={`Agenda de ${findPerson(view).name}`}
+            subtitle={isDirector ? "Compromissos pessoais + o que foi marcado na agenda da empresa para essa pessoa." : "Seus compromissos pessoais e o que a empresa marcou para você."}
+            scope="employee"
+            employeeId={view}
+            data={data} persist={persist}
+            monthDate={monthDate} setMonthDate={setMonthDate}
+            currentUser={currentUser}
+            selectedDay={selectedDay} setSelectedDay={setSelectedDay}
+            modalOpen={modalOpen} setModalOpen={setModalOpen}
+            modalDefaults={modalDefaults} setModalDefaults={setModalDefaults}
+          />
+        )}
+        {typeof view === "string" && view.startsWith("client:") && findClient(view.slice(7)) && (
+          <ClientDetail
+            client={findClient(view.slice(7))}
+            data={data} persist={persist}
+            isDirector={isDirector}
+            currentUser={currentUser}
+            monthDate={monthDate} setMonthDate={setMonthDate}
+            selectedDay={selectedDay} setSelectedDay={setSelectedDay}
+            modalOpen={modalOpen} setModalOpen={setModalOpen}
+            modalDefaults={modalDefaults} setModalDefaults={setModalDefaults}
+          />
+        )}
+        {view === "network" && isDirector && (
+          <NetworkPanel data={data} persist={persist} />
+        )}
+        {view === "pontuacao-rede" && isDirector && (
+          <PontuacaoBoard
+            vendedores={data.clients.flatMap(c => collectVendedores(c))}
+            onUpdateVendedor={(v, patch) => updateFuncionarioGlobal(v.clientId, v.unitId, v.id, patch)}
+            canEdit={true}
+            title="Pontuação dos Vendedores"
+            subtitle="Vale para os colaboradores dos seus clientes — vendedores de todas as empresas e unidades. Só superiores lançam pontos; o funcionário do mês é escolhido automaticamente por quem mais pontua."
+          />
+        )}
+        {view === "alertas" && isDirector && (
+          <AlertsView data={data} />
+        )}
+        {view === "contratos" && isDirector && (
+          <ContractsOverview data={data} />
+        )}
+        {view === "prospects" && isDirector && (
+          <ProspectsManager data={data} persist={persist} />
+        )}
+        {view === "feedback-inbox" && isDirector && (
+          <FeedbackInbox data={data} />
+        )}
+        {view === "feedback-send" && !isDirector && (
+          <FeedbackSendForm
+            data={data} persist={persist}
+            authorName={self.name}
+            authorLabel={isClient ? "Cliente" : isVendedor ? "Vendedor(a) · " + (vendedorInfo?.clientId ? findClient(vendedorInfo.clientId)?.name : "") : isManager ? "Gerente · " + (managerInfo ? findClient(managerInfo.clientId)?.name + " · " + findClient(managerInfo.clientId)?.units.find(u => u.id === managerInfo.unitId)?.name : "") : "Colaborador(a) da consultoria"}
+          />
+        )}
+        {view === "vendas" && isVendedor && vendedorInfo && (
+          <VendedorPortal
+            funcionario={vendedorInfo.func}
+            ownerLabel={vendedorInfo.unitId ? findClient(vendedorInfo.clientId)?.name + " · " + (findClient(vendedorInfo.clientId)?.units.find(u => u.id === vendedorInfo.unitId)?.name || "") : findClient(vendedorInfo.clientId)?.name}
+            companyVendedores={collectVendedores(findClient(vendedorInfo.clientId))}
+            monthDate={monthDate} setMonthDate={setMonthDate}
+            onChangeSales={sales => updateFuncionarioGlobal(vendedorInfo.clientId, vendedorInfo.unitId, currentUser.id, { sales })}
+          />
+        )}
+        {view === "minha-unidade" && isManager && managerInfo && (
+          <ManagerPortal
+            unit={managerInfo.unit}
+            client={findClient(managerInfo.clientId)}
+            onChangeUnit={patch => updateUnitGlobal(managerInfo.clientId, managerInfo.unitId, patch)}
+            monthDate={monthDate} setMonthDate={setMonthDate}
+          />
+        )}
+        {view === "financeiro" && isDirector && (
+          <FinanceiroModule data={data} persist={persist} />
+        )}
+        {view === "access" && isDirector && (
+          <AccessManager data={data} persist={persist} revealPw={revealPw} setRevealPw={setRevealPw} />
+        )}
+        {view === "profile" && (
+          <ProfileEditor
+            isDirector={isDirector}
+            person={self}
+            data={data} persist={persist}
+            currentUser={currentUser}
+            onSaveField={
+              isVendedor ? (field, value) => updateFuncionarioGlobal(vendedorInfo.clientId, vendedorInfo.unitId, currentUser.id, { [field]: value })
+              : isManager ? (field, value) => {
+                  const map = { name: "managerName", status: "managerStatus", password: "managerPassword", photo: "managerPhoto" };
+                  return updateUnitGlobal(managerInfo.clientId, managerInfo.unitId, { [map[field] || field]: value });
+                }
+              : undefined
+            }
+          />
+        )}
+      </div>
+    </div>
+  );
+}
+
+function LoginScreen({ data, loginSel, setLoginSel, loginPass, setLoginPass, loginError, onSubmit }) {
+  const [showPass, setShowPass] = useState(false);
+  const [search, setSearch] = useState(() => data.director.name);
+
+  const allVendedores = data.clients.flatMap(c => collectVendedores(c));
+  const allManagers = data.clients.flatMap(c => c.units.filter(u => u.managerName).map(u => ({ id: u.managerId, name: u.managerName, sub: "Gerente · " + c.name + " · " + u.name })));
+  const options = [{ id: "director", name: data.director.name, sub: "Diretor(a)" }]
+    .concat(data.employees.filter(e => e.active).map(e => ({ id: e.id, name: e.name, sub: "Colaborador(a)" })))
+    .concat(data.clients.map(c => ({ id: c.id, name: c.name, sub: "Cliente" })))
+    .concat(allManagers)
+    .concat(allVendedores.map(v => ({ id: v.id, name: v.name, sub: "Vendedor(a) · " + v.ownerLabel })));
+
+  const filtered = search.trim() === "" ? options : options.filter(o => (o.name + " " + o.sub).toLowerCase().includes(search.toLowerCase()));
+
+  function doLogin() {
+    onSubmit({ preventDefault: () => {} });
+  }
+
+  return (
+    <div className="orgapp" style={{ minHeight: 500, display: "flex", alignItems: "center", justifyContent: "center", padding: 24 }}>
+      <style>{FONT_STYLE}</style>
+      <div className="card" style={{ width: 380, padding: "28px 26px" }}>
+        <div className="mono" style={{ fontSize: 11, letterSpacing: 1.5, color: "var(--gold)", marginBottom: 4 }}>FICHA DE ACESSO</div>
+        <h1 className="disp" style={{ fontSize: 26, margin: "0 0 18px", color: "var(--navy)" }}>Agenda da Rede</h1>
+
+        <label style={{ fontSize: 12, color: "#665f4f", display: "block", marginBottom: 5 }}>Quem é você?</label>
+        <input className="input" style={{ width: "100%", marginBottom: 6 }} placeholder="Busque seu nome…" value={search}
+          onChange={e => setSearch(e.target.value)} />
+        <div style={{ maxHeight: 150, overflowY: "auto", border: "1px solid var(--line)", borderRadius: 3, marginBottom: 14 }}>
+          {filtered.slice(0, 40).map(o => (
+            <div key={o.id} onClick={() => { setLoginSel(o.id); setSearch(o.name); }}
+              style={{ padding: "7px 10px", fontSize: 13, cursor: "pointer", borderBottom: "1px solid var(--line)", background: loginSel === o.id ? "var(--gold-soft)" : "#fff" }}>
+              {o.name} <span className="mono" style={{ fontSize: 10, color: "#9b9585" }}>· {o.sub}</span>
+            </div>
+          ))}
+          {filtered.length === 0 && <div style={{ padding: 8, fontSize: 12, color: "#9b9585" }}>Nenhum perfil encontrado.</div>}
+        </div>
+
+        <label style={{ fontSize: 12, color: "#665f4f", display: "block", marginBottom: 5 }}>Senha</label>
+        <div style={{ display: "flex", gap: 6, marginBottom: 6 }}>
+          <input className="input" style={{ flex: 1 }} type={showPass ? "text" : "password"} value={loginPass}
+            autoComplete="off" autoCorrect="off" autoCapitalize="off" spellCheck="false"
+            onChange={e => setLoginPass(e.target.value)}
+            onKeyDown={e => { if (e.key === "Enter") doLogin(); }}
+            placeholder="Senha de acesso" />
+          <button type="button" className="input" style={{ cursor: "pointer" }} onClick={() => setShowPass(s => !s)}>{showPass ? "ocultar" : "ver"}</button>
+        </div>
+        <div className="mono" style={{ fontSize: 11, color: "#9b9585", marginBottom: 16 }}>senha inicial de teste: 1234</div>
+
+        {loginError && <div style={{ color: "var(--red)", fontSize: 13, marginBottom: 12 }}>{loginError}</div>}
+
+        <button type="button" className="btn-primary" style={{ width: "100%", padding: "10px 0", fontSize: 14, border: "none", cursor: "pointer" }} onClick={doLogin}>Entrar</button>
+
+        <div className="card" style={{ marginTop: 18, padding: "10px 12px", fontSize: 11.5, color: "#7a7460", lineHeight: 1.5 }}>
+          Protótipo de demonstração: as senhas ficam guardadas neste artifact, não em um servidor seguro.
+          Para uso real com dados de colaboradores e clientes, esse login precisa ser reconstruído com um backend de verdade.
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function Sidebar({ isDirector, isClient, isVendedor, isManager, self, activeEmployees, clients, view, setView, onLogout }) {
+  const [clientSearch, setClientSearch] = useState("");
+  const filteredClients = clients.filter(c => c.name.toLowerCase().includes(clientSearch.toLowerCase()));
+  return (
+    <div style={{ width: 230, background: "var(--navy)", color: "#EDEBE3", padding: "20px 0", display: "flex", flexDirection: "column" }}>
+      <div style={{ padding: "0 18px 16px", borderBottom: "1px solid rgba(255,255,255,0.12)", marginBottom: 10 }}>
+        <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+          <Avatar person={self} size={38} />
+          <div style={{ minWidth: 0 }}>
+            <div style={{ fontSize: 13.5, fontWeight: 600, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{self.name}</div>
+            <div className="mono" style={{ fontSize: 10, color: "var(--gold-soft)", letterSpacing: 0.5 }}>
+              {isDirector ? "DIRETOR(A) · ACESSO TOTAL" : isClient ? "CLIENTE" : isVendedor ? "VENDEDOR(A)" : isManager ? "GERENTE" : "COLABORADOR(A)"}
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <div style={{ flex: 1, overflowY: "auto" }}>
+        {isDirector && (
+          <SideItem label="Agenda da Empresa" active={view === "company"} onClick={() => setView("company")} />
+        )}
+        {isDirector && (
+          <SideItem label="Painel da Rede" active={view === "network"} onClick={() => setView("network")} />
+        )}
+        {!isClient && !isVendedor && !isManager && (
+          <>
+            <div className="mono" style={{ fontSize: 10, color: "rgba(237,235,227,0.5)", padding: "10px 18px 4px", letterSpacing: 1 }}>
+              {isDirector ? "AGENDAS DA EQUIPE" : "MINHA AGENDA"}
+            </div>
+            {(isDirector ? activeEmployees : activeEmployees.filter(e => e.id === self.id)).map(e => (
+              <SideItem key={e.id} label={e.name} active={view === e.id} onClick={() => setView(e.id)} />
+            ))}
+          </>
+        )}
+
+        {isDirector && (
+          <>
+            <div className="mono" style={{ fontSize: 10, color: "rgba(237,235,227,0.5)", padding: "12px 18px 4px", letterSpacing: 1 }}>CLIENTES (20)</div>
+            <div style={{ padding: "0 18px 6px" }}>
+              <input value={clientSearch} onChange={e => setClientSearch(e.target.value)} placeholder="Buscar cliente…"
+                style={{ width: "100%", fontSize: 12, padding: "5px 8px", borderRadius: 3, border: "1px solid rgba(255,255,255,0.2)", background: "rgba(255,255,255,0.08)", color: "#EDEBE3" }} />
+            </div>
+            <div style={{ maxHeight: 180, overflowY: "auto" }}>
+              {filteredClients.map(c => (
+                <SideItem key={c.id} label={c.name} active={view === "client:" + c.id} onClick={() => setView("client:" + c.id)} />
+              ))}
+            </div>
+          </>
+        )}
+        {isClient && (
+          <>
+            <div className="mono" style={{ fontSize: 10, color: "rgba(237,235,227,0.5)", padding: "10px 18px 4px", letterSpacing: 1 }}>MEU ESPAÇO</div>
+            <SideItem label={self.name} active={view === "client:" + self.id} onClick={() => setView("client:" + self.id)} />
+          </>
+        )}
+        {isVendedor && (
+          <>
+            <div className="mono" style={{ fontSize: 10, color: "rgba(237,235,227,0.5)", padding: "10px 18px 4px", letterSpacing: 1 }}>MEU ESPAÇO</div>
+            <SideItem label="Minhas Vendas" active={view === "vendas"} onClick={() => setView("vendas")} />
+          </>
+        )}
+        {isManager && (
+          <>
+            <div className="mono" style={{ fontSize: 10, color: "rgba(237,235,227,0.5)", padding: "10px 18px 4px", letterSpacing: 1 }}>MEU ESPAÇO</div>
+            <SideItem label="Minha Unidade" active={view === "minha-unidade"} onClick={() => setView("minha-unidade")} />
+          </>
+        )}
+
+        {isDirector && (
+          <>
+            <div style={{ height: 1, background: "rgba(255,255,255,0.12)", margin: "10px 18px" }} />
+            <SideItem label="Pontuação dos Vendedores" active={view === "pontuacao-rede"} onClick={() => setView("pontuacao-rede")} />
+            <SideItem label="Alertas" active={view === "alertas"} onClick={() => setView("alertas")} />
+            <SideItem label="Contratos" active={view === "contratos"} onClick={() => setView("contratos")} />
+            <SideItem label="Possíveis Clientes" active={view === "prospects"} onClick={() => setView("prospects")} />
+            <SideItem label="Caixa de Feedback" active={view === "feedback-inbox"} onClick={() => setView("feedback-inbox")} />
+          </>
+        )}
+        {!isDirector && (
+          <SideItem label="Enviar Feedback" active={view === "feedback-send"} onClick={() => setView("feedback-send")} />
+        )}
+
+        {isDirector && (
+          <>
+            <div style={{ height: 1, background: "rgba(255,255,255,0.12)", margin: "10px 18px" }} />
+            <SideItem label="Financeiro" active={view === "financeiro"} onClick={() => setView("financeiro")} />
+            <SideItem label="Gerenciar Acessos" active={view === "access"} onClick={() => setView("access")} />
+          </>
+        )}
+        <SideItem label="Meu Perfil" active={view === "profile"} onClick={() => setView("profile")} />
+      </div>
+
+      <div style={{ padding: "12px 18px 0" }}>
+        <button onClick={onLogout} style={{ color: "rgba(237,235,227,0.75)", fontSize: 12.5, background: "none", border: "none", cursor: "pointer", padding: 0 }}>
+          ← Sair da conta
+        </button>
+      </div>
+    </div>
+  );
+}
+
+function SideItem({ label, active, onClick }) {
+  return (
+    <div onClick={onClick} className={"tab" + (active ? " active" : "")} style={{ padding: "9px 18px", fontSize: 13.5, cursor: "pointer", color: active ? "#2C2410" : "#EDEBE3", background: active ? "var(--gold-soft)" : "transparent" }}>
+      {label}
+    </div>
+  );
+}
+
+function AgendaView({ title, subtitle, scope, employeeId, data, persist, monthDate, setMonthDate, currentUser, selectedDay, setSelectedDay, modalOpen, setModalOpen, modalDefaults, setModalDefaults }) {
+  const cells = useMemo(() => buildMonthGrid(monthDate), [monthDate]);
+  const today = new Date();
+  const [printOpen, setPrintOpen] = useState(false);
+
+  const eventsForDay = (day) => {
+    if (!day) return [];
+    return data.events.filter(ev => {
+      if (ev.date !== toISODate(day)) return false;
+      if (scope === "company") return ev.scope === "company";
+      if (scope === "client") return (ev.scope === "personal" && ev.ownerId === employeeId) || (ev.scope === "company" && (ev.taggedClientIds || []).includes(employeeId));
+      return (ev.scope === "personal" && ev.ownerId === employeeId) || (ev.scope === "company" && ev.taggedIds.includes(employeeId));
+    });
+  };
+
+  function buildPrintableAgenda() {
+    const grouped = {};
+    cells.filter(d => d).forEach(day => {
+      const evs = eventsForDay(day);
+      if (evs.length > 0) grouped[toISODate(day)] = evs;
+    });
+    const days = Object.keys(grouped).sort().map(dateKey => {
+      const dayEvents = [...grouped[dateKey]].sort((a, b) => (a.timeStart || "").localeCompare(b.timeStart || ""));
+      return {
+        dateKey,
+        dateLabel: new Date(dateKey + "T00:00:00").toLocaleDateString("pt-BR", { weekday: "long", day: "2-digit", month: "long" }),
+        events: dayEvents.map(ev => {
+          const tagNames = [];
+          if (ev.scope === "company") {
+            (ev.taggedIds || []).forEach(id => { const p = data.employees.find(e => e.id === id); if (p) tagNames.push(p.name); });
+            (ev.taggedClientIds || []).forEach(id => { const c = data.clients.find(c2 => c2.id === id); if (c) tagNames.push(c.name); });
+          }
+          return {
+            time: ev.timeStart ? ev.timeStart + (ev.timeEnd ? " – " + ev.timeEnd : "") : "sem horário definido",
+            title: ev.title,
+            desc: ev.desc || "",
+            tagNames,
+            scopeLabel: ev.scope === "company" ? "Agenda da empresa" : "Pessoal",
+          };
+        }),
+      };
+    });
+    return { title, subtitle: monthLabel(monthDate), days, filename: "agenda-" + title.toLowerCase().replace(/\s+/g, "-") + "-" + monthKey(monthDate.getFullYear(), monthDate.getMonth()) };
+  }
+
+  function openNewEvent(day) {
+    setModalDefaults({ date: day ? toISODate(day) : toISODate(new Date()) });
+    setModalOpen(true);
+  }
+
+  function canAddHere() {
+    if (scope === "company") return currentUser.type === "director";
+    // employee agenda: director can add (company or personal-for-them), the owning employee can add personal
+    return currentUser.type === "director" || currentUser.id === employeeId;
+  }
+
+  async function saveEvent(ev) {
+    const next = { ...data, events: [...data.events, { id: uid("ev"), ...ev }] };
+    await persist(next);
+    setModalOpen(false);
+  }
+
+  async function deleteEvent(id) {
+    const next = { ...data, events: data.events.filter(e => e.id !== id) };
+    await persist(next);
+  }
+
+  return (
+    <div>
+      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", marginBottom: 4, flexWrap: "wrap", gap: 10 }}>
+        <div>
+          <h2 className="disp" style={{ fontSize: 24, margin: 0, color: "var(--navy)" }}>{title}</h2>
+          <p style={{ fontSize: 13, color: "#6d6754", margin: "4px 0 0", maxWidth: 480 }}>{subtitle}</p>
+        </div>
+        <div style={{ display: "flex", gap: 8 }}>
+          <button type="button" className="input" style={{ padding: "8px 14px", fontSize: 13, cursor: "pointer" }} onClick={() => setPrintOpen(true)}>🖨️ Imprimir / Salvar PDF</button>
+          {canAddHere() && (
+            <button className="btn-gold" style={{ padding: "8px 16px", fontSize: 13.5 }} onClick={() => openNewEvent(selectedDay)}>
+              + Novo compromisso
+            </button>
+          )}
+        </div>
+      </div>
+
+      {printOpen && (
+        <AgendaPrintModal {...buildPrintableAgenda()} onClose={() => setPrintOpen(false)} />
+      )}
+
+      <div style={{ display: "flex", alignItems: "center", gap: 10, margin: "18px 0 10px" }}>
+        <button onClick={() => setMonthDate(new Date(monthDate.getFullYear(), monthDate.getMonth() - 1, 1))} className="input" style={{ padding: "4px 10px", cursor: "pointer" }}>‹</button>
+        <div className="mono" style={{ fontSize: 13.5, textTransform: "capitalize", minWidth: 150, textAlign: "center" }}>{monthLabel(monthDate)}</div>
+        <button onClick={() => setMonthDate(new Date(monthDate.getFullYear(), monthDate.getMonth() + 1, 1))} className="input" style={{ padding: "4px 10px", cursor: "pointer" }}>›</button>
+      </div>
+
+      <div style={{ display: "grid", gridTemplateColumns: "repeat(7,1fr)", gap: 4, marginBottom: 6 }}>
+        {["dom", "seg", "ter", "qua", "qui", "sex", "sáb"].map(d => (
+          <div key={d} className="mono" style={{ fontSize: 10.5, textAlign: "center", color: "#9b9585", textTransform: "uppercase" }}>{d}</div>
+        ))}
+      </div>
+      <div style={{ display: "grid", gridTemplateColumns: "repeat(7,1fr)", gap: 4 }}>
+        {cells.map((day, i) => {
+          const evs = eventsForDay(day);
+          const isToday = day && sameDay(day, today);
+          const isSelected = day && selectedDay && sameDay(day, selectedDay);
+          return (
+            <div key={i} className={"daycell" + (isToday ? " today" : "")}
+              style={{ opacity: day ? 1 : 0.3, padding: 6, boxShadow: isSelected ? "inset 0 0 0 1.5px var(--navy)" : undefined }}
+              onClick={() => day && setSelectedDay(day)}>
+              {day && (
+                <>
+                  <div className="mono" style={{ fontSize: 11, color: "#7a7460" }}>{day.getDate()}</div>
+                  <div style={{ display: "flex", flexWrap: "wrap", gap: 3, marginTop: 4 }}>
+                    {evs.slice(0, 4).map(ev => (
+                      <span key={ev.id} className="dot" style={{ background: ev.scope === "company" ? "var(--gold)" : "var(--navy)" }} title={ev.title} />
+                    ))}
+                  </div>
+                </>
+              )}
+            </div>
+          );
+        })}
+      </div>
+
+      {selectedDay && (
+        <div className="card" style={{ marginTop: 20, padding: 16 }}>
+          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 10 }}>
+            <div className="mono" style={{ fontSize: 12.5, color: "var(--navy)" }}>{selectedDay.toLocaleDateString("pt-BR", { weekday: "long", day: "2-digit", month: "long" })}</div>
+            {canAddHere() && (
+              <button className="btn-primary" style={{ fontSize: 12.5, padding: "5px 12px" }} onClick={() => openNewEvent(selectedDay)}>+ Adicionar aqui</button>
+            )}
+          </div>
+          {eventsForDay(selectedDay).length === 0 && (
+            <div style={{ fontSize: 13, color: "#9b9585" }}>Nada marcado neste dia.</div>
+          )}
+          {eventsForDay(selectedDay).sort((a, b) => (a.timeStart || "").localeCompare(b.timeStart || "")).map(ev => (
+            <div key={ev.id} style={{ padding: "10px 0", borderTop: "1px solid var(--line)" }}>
+              <div style={{ display: "flex", justifyContent: "space-between", gap: 8 }}>
+                <div>
+                  <div style={{ fontWeight: 600, fontSize: 14 }}>{ev.title}</div>
+                  <div className="mono" style={{ fontSize: 11.5, color: "#7a7460" }}>
+                    {ev.timeStart || "—"}{ev.timeEnd ? " – " + ev.timeEnd : ""}
+                  </div>
+                  {ev.desc && <div style={{ fontSize: 12.5, color: "#524d40", marginTop: 4 }}>{ev.desc}</div>}
+                  {ev.scope === "company" && ev.taggedIds.length > 0 && (
+                    <div style={{ marginTop: 6, display: "flex", gap: 5, flexWrap: "wrap" }}>
+                      {ev.taggedIds.map(id => {
+                        const p = data.employees.find(e => e.id === id);
+                        return p ? <span key={id} className="mono badge-company" style={{ fontSize: 10.5, padding: "2px 7px", borderRadius: 10, background: "var(--gold-soft)", color: "#6b4f14" }}>{p.name}</span> : null;
+                      })}
+                    </div>
+                  )}
+                  {ev.scope === "company" && ev.taggedClientIds && ev.taggedClientIds.length > 0 && (
+                    <div style={{ marginTop: 6, display: "flex", gap: 5, flexWrap: "wrap" }}>
+                      {ev.taggedClientIds.map(id => {
+                        const c = data.clients.find(x => x.id === id);
+                        return c ? <span key={id} className="mono" style={{ fontSize: 10.5, padding: "2px 7px", borderRadius: 10, background: "#E7ECF2", color: "var(--navy)" }}>{c.name}</span> : null;
+                      })}
+                    </div>
+                  )}
+                  <span className="mono" style={{ fontSize: 10, color: ev.scope === "company" ? "#6b4f14" : "var(--navy)" }}>
+                    {ev.scope === "company" ? "AGENDA DA EMPRESA" : "PESSOAL"}
+                  </span>
+                </div>
+                {(currentUser.type === "director" || (ev.scope === "personal" && ev.ownerId === currentUser.id) || (ev.scope === "company" && currentUser.type === "director")) && (
+                  <button onClick={() => deleteEvent(ev.id)} style={{ background: "none", border: "none", color: "var(--red)", cursor: "pointer", fontSize: 12 }}>remover</button>
+                )}
+              </div>
+            </div>
+          ))}
+        </div>
+      )}
+
+      {modalOpen && (
+        <EventModal
+          scope={scope}
+          employeeId={employeeId}
+          data={data}
+          currentUser={currentUser}
+          defaults={modalDefaults}
+          onCancel={() => setModalOpen(false)}
+          onSave={saveEvent}
+        />
+      )}
+    </div>
+  );
+}
+
+function EventModal({ scope, employeeId, data, currentUser, defaults, onCancel, onSave }) {
+  const [title, setTitle] = useState("");
+  const [desc, setDesc] = useState("");
+  const [date, setDate] = useState(defaults?.date || toISODate(new Date()));
+  const [timeStart, setTimeStart] = useState("");
+  const [timeEnd, setTimeEnd] = useState("");
+  const [tagged, setTagged] = useState([]);
+  const [taggedClients, setTaggedClients] = useState([]);
+  const [clientSearch, setClientSearch] = useState("");
+  const [autoTaggedNote, setAutoTaggedNote] = useState("");
+
+  const canTag = scope === "company";
+
+  useEffect(() => {
+    if (!canTag) return;
+    const text = (title + " " + desc).toLowerCase();
+    const empMatches = data.employees.filter(e => e.active && e.name && text.includes(e.name.split(" ")[0].toLowerCase()));
+    const clientMatches = data.clients.filter(c => c.name && text.includes(c.name.toLowerCase()));
+    const notes = [];
+    if (empMatches.length > 0) {
+      setTagged(prev => Array.from(new Set([...prev, ...empMatches.map(m => m.id)])));
+      notes.push(empMatches.map(m => m.name.split(" ")[0]).join(", "));
+    }
+    if (clientMatches.length > 0) {
+      setTaggedClients(prev => Array.from(new Set([...prev, ...clientMatches.map(m => m.id)])));
+      notes.push(clientMatches.map(m => m.name).join(", "));
+    }
+    setAutoTaggedNote(notes.length ? "Detectei " + notes.join(" e ") + " no texto e já marquei automaticamente." : "");
+    // eslint-disable-next-line
+  }, [title, desc]);
+
+  function toggleTag(id) {
+    setTagged(prev => prev.includes(id) ? prev.filter(x => x !== id) : [...prev, id]);
+  }
+  function toggleClientTag(id) {
+    setTaggedClients(prev => prev.includes(id) ? prev.filter(x => x !== id) : [...prev, id]);
+  }
+
+  function submit() {
+    if (!title.trim() || !date) return;
+    if (scope === "company") {
+      onSave({ scope: "company", date, timeStart, timeEnd, title: title.trim(), desc: desc.trim(), taggedIds: tagged, taggedClientIds: taggedClients, ownerId: null, createdBy: "director" });
+    } else {
+      const ownerId = currentUser.type === "director" ? employeeId : currentUser.id;
+      onSave({ scope: "personal", date, timeStart, timeEnd, title: title.trim(), desc: desc.trim(), taggedIds: [], taggedClientIds: [], ownerId, createdBy: currentUser.type === "director" ? "director" : ownerId });
+    }
+  }
+
+  const filteredClientsForTag = data.clients.filter(c => c.name.toLowerCase().includes(clientSearch.toLowerCase()));
+
+  return (
+    <div style={{ position: "fixed", inset: 0, background: "rgba(20,18,12,0.45)", display: "flex", alignItems: "center", justifyContent: "center", zIndex: 50 }} onClick={onCancel}>
+      <div onClick={e => e.stopPropagation()} className="card" style={{ width: 420, maxWidth: "92vw", padding: 22 }}>
+        <h3 className="disp" style={{ margin: "0 0 4px", fontSize: 19, color: "var(--navy)" }}>Novo compromisso</h3>
+        <div className="mono" style={{ fontSize: 11, color: "#9b9585", marginBottom: 14 }}>
+          {scope === "company" ? "AGENDA DA EMPRESA" : "AGENDA PESSOAL"}
+        </div>
+
+        <label style={{ fontSize: 12, color: "#665f4f" }}>Título</label>
+        <input className="input" style={{ width: "100%", margin: "4px 0 10px" }} value={title} onChange={e => setTitle(e.target.value)} placeholder="Ex: Reunião com Ana sobre metas" />
+
+        <label style={{ fontSize: 12, color: "#665f4f" }}>Descrição</label>
+        <textarea className="input" style={{ width: "100%", margin: "4px 0 10px", minHeight: 60, resize: "vertical" }} value={desc} onChange={e => setDesc(e.target.value)} placeholder="Detalhes do compromisso" />
+
+        <div style={{ display: "flex", gap: 10, marginBottom: 10 }}>
+          <div style={{ flex: 1 }}>
+            <label style={{ fontSize: 12, color: "#665f4f" }}>Data</label>
+            <input className="input" style={{ width: "100%", marginTop: 4 }} type="date" value={date} onChange={e => setDate(e.target.value)} />
+          </div>
+          <div>
+            <label style={{ fontSize: 12, color: "#665f4f" }}>Início</label>
+            <input className="input" style={{ marginTop: 4 }} type="time" value={timeStart} onChange={e => setTimeStart(e.target.value)} />
+          </div>
+          <div>
+            <label style={{ fontSize: 12, color: "#665f4f" }}>Término</label>
+            <input className="input" style={{ marginTop: 4 }} type="time" value={timeEnd} onChange={e => setTimeEnd(e.target.value)} />
+          </div>
+        </div>
+
+        {canTag && (
+          <div style={{ marginBottom: 6 }}>
+            <label style={{ fontSize: 12, color: "#665f4f" }}>Marcar colaborador(es)</label>
+            <div style={{ display: "flex", flexWrap: "wrap", gap: 6, marginTop: 6 }}>
+              {data.employees.filter(e => e.active).map(e => (
+                <label key={e.id} style={{ display: "flex", alignItems: "center", gap: 5, fontSize: 12.5, padding: "4px 9px", border: "1px solid var(--line)", borderRadius: 20, cursor: "pointer", background: tagged.includes(e.id) ? "var(--gold-soft)" : "#fff" }}>
+                  <input type="checkbox" checked={tagged.includes(e.id)} onChange={() => toggleTag(e.id)} />
+                  {e.name}
+                </label>
+              ))}
+            </div>
+            {autoTaggedNote && <div style={{ fontSize: 11.5, color: "var(--green)", marginTop: 6 }}>{autoTaggedNote}</div>}
+          </div>
+        )}
+
+        {canTag && (
+          <div style={{ marginBottom: 6 }}>
+            <label style={{ fontSize: 12, color: "#665f4f" }}>Marcar cliente(s)</label>
+            <input className="input" style={{ width: "100%", margin: "4px 0 6px" }} placeholder="Buscar cliente…" value={clientSearch} onChange={e => setClientSearch(e.target.value)} />
+            <div style={{ display: "flex", flexWrap: "wrap", gap: 6, maxHeight: 110, overflowY: "auto" }}>
+              {filteredClientsForTag.map(c => (
+                <label key={c.id} style={{ display: "flex", alignItems: "center", gap: 5, fontSize: 12.5, padding: "4px 9px", border: "1px solid var(--line)", borderRadius: 20, cursor: "pointer", background: taggedClients.includes(c.id) ? "#E7ECF2" : "#fff" }}>
+                  <input type="checkbox" checked={taggedClients.includes(c.id)} onChange={() => toggleClientTag(c.id)} />
+                  {c.name}
+                </label>
+              ))}
+            </div>
+          </div>
+        )}
+
+        <div style={{ display: "flex", justifyContent: "flex-end", gap: 8, marginTop: 16 }}>
+          <button type="button" onClick={onCancel} style={{ padding: "8px 14px", fontSize: 13, background: "none", border: "1px solid var(--line)", borderRadius: 3, cursor: "pointer" }}>Cancelar</button>
+          <button type="button" className="btn-primary" style={{ padding: "8px 16px", fontSize: 13, border: "none", cursor: "pointer" }} onClick={submit}>Salvar</button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function AccessManager({ data, persist, revealPw, setRevealPw }) {
+  const [clientSearch, setClientSearch] = useState("");
+  const [newName, setNewName] = useState("");
+  const [newPass, setNewPass] = useState("1234");
+  async function updateDirector(field, value) {
+    await persist({ ...data, director: { ...data.director, [field]: value } });
+  }
+  async function updateEmployee(id, field, value) {
+    await persist({ ...data, employees: data.employees.map(e => e.id === id ? { ...e, [field]: value } : e) });
+  }
+  async function updateClient(id, field, value) {
+    await persist({ ...data, clients: data.clients.map(c => c.id === id ? { ...c, [field]: value } : c) });
+  }
+  async function addColaborador() {
+    if (!newName.trim() || !newPass.trim()) return;
+    const entry = { id: uid("emp"), name: newName.trim(), password: newPass.trim(), photo: null, status: "", active: true };
+    await persist({ ...data, employees: [...data.employees, entry] });
+    setNewName(""); setNewPass("1234");
+  }
+  async function toggleActive(id) {
+    await persist({ ...data, employees: data.employees.map(e => e.id === id ? { ...e, active: !e.active } : e) });
+  }
+
+  const filteredClients = data.clients.filter(c => c.name.toLowerCase().includes(clientSearch.toLowerCase()));
+
+  return (
+    <div>
+      <h2 className="disp" style={{ fontSize: 24, margin: 0, color: "var(--navy)" }}>Gerenciar Acessos</h2>
+      <p style={{ fontSize: 13, color: "#6d6754", margin: "4px 0 18px", maxWidth: 520 }}>
+        Cadastre e altere as senhas de cada colaborador, cliente e a sua. Só você (diretor) vê e edita esta tela.
+      </p>
+
+      <AccessRow
+        label="Você · Diretor(a) (acesso total)"
+        person={data.director}
+        revealed={!!revealPw["director"]}
+        onToggleReveal={() => setRevealPw(p => ({ ...p, director: !p.director }))}
+        onChangeName={v => updateDirector("name", v)}
+        onChangePassword={v => updateDirector("password", v)}
+        onChangeStatus={v => updateDirector("status", v)}
+      />
+
+      <div className="mono" style={{ fontSize: 11, color: "#9b9585", margin: "18px 0 8px", letterSpacing: 1 }}>COLABORADORES — QUANTIDADE ILIMITADA</div>
+      <div className="card" style={{ padding: 14, marginBottom: 12 }}>
+        <div className="mono" style={{ fontSize: 10.5, color: "#9b9585", marginBottom: 8 }}>ADICIONAR NOVO COLABORADOR</div>
+        <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+          <input className="input" style={{ flex: 1, minWidth: 160 }} placeholder="Nome do novo colaborador" value={newName} onChange={e => setNewName(e.target.value)} />
+          <input className="input" style={{ width: 140 }} placeholder="Senha" value={newPass} onChange={e => setNewPass(e.target.value)} />
+          <button type="button" className="btn-gold" style={{ padding: "0 14px", fontSize: 12.5, border: "none", cursor: "pointer" }} onClick={addColaborador}>+ Adicionar</button>
+        </div>
+      </div>
+      {data.employees.map(e => (
+        <div key={e.id} style={{ position: "relative" }}>
+          <AccessRow
+            label={"Colaborador(a)" + (e.active ? "" : " · desativado")}
+            person={e}
+            revealed={!!revealPw[e.id]}
+            onToggleReveal={() => setRevealPw(p => ({ ...p, [e.id]: !p[e.id] }))}
+            onChangeName={v => updateEmployee(e.id, "name", v)}
+            onChangePassword={v => updateEmployee(e.id, "password", v)}
+            onChangeStatus={v => updateEmployee(e.id, "status", v)}
+          />
+          <button type="button" onClick={() => toggleActive(e.id)}
+            style={{ position: "absolute", top: 14, right: 14, background: "none", border: "1px solid var(--line)", borderRadius: 3, padding: "3px 10px", fontSize: 11, cursor: "pointer", color: e.active ? "var(--red)" : "var(--green)" }}>
+            {e.active ? "desativar" : "reativar"}
+          </button>
+        </div>
+      ))}
+
+      <div className="mono" style={{ fontSize: 11, color: "#9b9585", margin: "18px 0 8px", letterSpacing: 1 }}>CLIENTES (20)</div>
+      <input className="input" style={{ width: "100%", marginBottom: 10 }} placeholder="Buscar cliente para editar acesso…" value={clientSearch} onChange={e => setClientSearch(e.target.value)} />
+      <div style={{ maxHeight: 420, overflowY: "auto", paddingRight: 4 }}>
+        {filteredClients.map(c => (
+          <AccessRow
+            key={c.id}
+            label="Cliente"
+            person={c}
+            revealed={!!revealPw[c.id]}
+            onToggleReveal={() => setRevealPw(p => ({ ...p, [c.id]: !p[c.id] }))}
+            onChangeName={v => updateClient(c.id, "name", v)}
+            onChangePassword={v => updateClient(c.id, "password", v)}
+            onChangeStatus={v => updateClient(c.id, "status", v)}
+          />
+        ))}
+      </div>
+    </div>
+  );
+}
+
+function AccessRow({ label, person, revealed, onToggleReveal, onChangeName, onChangePassword, onChangeStatus }) {
+  const [name, setName] = useState(person.name);
+  const [pass, setPass] = useState(person.password);
+  const [status, setStatus] = useState(person.status || "");
+
+  return (
+    <div className="card" style={{ padding: 14, marginBottom: 10, display: "flex", gap: 14, alignItems: "flex-start" }}>
+      <Avatar person={person} size={44} />
+      <div style={{ flex: 1, display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10 }}>
+        <div>
+          <div className="mono" style={{ fontSize: 10.5, color: "#9b9585", marginBottom: 3 }}>{label.toUpperCase()}</div>
+          <input className="input" style={{ width: "100%" }} value={name} onChange={e => setName(e.target.value)} onBlur={() => onChangeName(name)} />
+        </div>
+        <div>
+          <div className="mono" style={{ fontSize: 10.5, color: "#9b9585", marginBottom: 3 }}>SENHA</div>
+          <div style={{ display: "flex", gap: 6 }}>
+            <input className="input" style={{ flex: 1 }} type={revealed ? "text" : "password"} value={pass} onChange={e => setPass(e.target.value)} onBlur={() => onChangePassword(pass)} />
+            <button type="button" onClick={onToggleReveal} className="input" style={{ cursor: "pointer" }}>{revealed ? "ocultar" : "ver"}</button>
+          </div>
+        </div>
+        <div style={{ gridColumn: "1 / -1" }}>
+          <div className="mono" style={{ fontSize: 10.5, color: "#9b9585", marginBottom: 3 }}>STATUS / FRASE</div>
+          <input className="input" style={{ width: "100%" }} value={status} onChange={e => setStatus(e.target.value)} onBlur={() => onChangeStatus(status)} placeholder="Uma frase para aparecer no perfil" />
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function ProfileEditor({ isDirector, person, data, persist, currentUser, onSaveField }) {
+  const [name, setName] = useState(person.name);
+  const [status, setStatus] = useState(person.status || "");
+  const [password, setPassword] = useState("");
+  const [confirm, setConfirm] = useState("");
+  const [msg, setMsg] = useState("");
+  const fileRef = useRef(null);
+
+  async function save(field, value) {
+    if (onSaveField) {
+      await onSaveField(field, value);
+    } else if (isDirector) {
+      await persist({ ...data, director: { ...data.director, [field]: value } });
+    } else if (currentUser.type === "client") {
+      await persist({ ...data, clients: data.clients.map(c => c.id === currentUser.id ? { ...c, [field]: value } : c) });
+    } else {
+      await persist({ ...data, employees: data.employees.map(e => e.id === currentUser.id ? { ...e, [field]: value } : e) });
+    }
+  }
+
+  async function handlePhoto(e) {
+    const file = e.target.files[0];
+    if (!file) return;
+    const reader = new FileReader();
+    reader.onload = () => save("photo", reader.result);
+    reader.readAsDataURL(file);
+  }
+
+  async function handlePasswordChange() {
+    if (!password || password !== confirm) { setMsg("As senhas não coincidem."); return; }
+    await save("password", password);
+    setPassword(""); setConfirm("");
+    setMsg("Senha atualizada.");
+  }
+
+  return (
+    <div style={{ maxWidth: 460 }}>
+      <h2 className="disp" style={{ fontSize: 24, margin: 0, color: "var(--navy)" }}>Meu Perfil</h2>
+      <div className="card" style={{ padding: 18, marginTop: 16 }}>
+        <div style={{ display: "flex", alignItems: "center", gap: 14, marginBottom: 16 }}>
+          <Avatar person={person} size={60} />
+          <div>
+            <button type="button" className="input" style={{ cursor: "pointer", fontSize: 12.5 }} onClick={() => fileRef.current.click()}>Alterar foto</button>
+            <input ref={fileRef} type="file" accept="image/*" style={{ display: "none" }} onChange={handlePhoto} />
+          </div>
+        </div>
+
+        <label style={{ fontSize: 12, color: "#665f4f" }}>Nome</label>
+        <input className="input" style={{ width: "100%", margin: "4px 0 12px" }} value={name} onChange={e => setName(e.target.value)} onBlur={() => save("name", name)} />
+
+        <label style={{ fontSize: 12, color: "#665f4f" }}>Frase / status na agenda</label>
+        <input className="input" style={{ width: "100%", margin: "4px 0 16px" }} value={status} onChange={e => setStatus(e.target.value)} onBlur={() => save("status", status)} placeholder="Ex: Foco em bater a meta do mês" />
+
+        <div style={{ height: 1, background: "var(--line)", margin: "14px 0" }} />
+
+        <div className="mono" style={{ fontSize: 11, color: "#9b9585", marginBottom: 8 }}>ALTERAR MINHA SENHA</div>
+        <input className="input" style={{ width: "100%", marginBottom: 8 }} type="password" placeholder="Nova senha" value={password} onChange={e => setPassword(e.target.value)} />
+        <input className="input" style={{ width: "100%", marginBottom: 10 }} type="password" placeholder="Confirmar nova senha" value={confirm} onChange={e => setConfirm(e.target.value)} />
+        <button type="button" className="btn-primary" style={{ padding: "8px 16px", fontSize: 13 }} onClick={handlePasswordChange}>Salvar senha</button>
+        {msg && <div style={{ fontSize: 12.5, color: msg.includes("não") ? "var(--red)" : "var(--green)", marginTop: 8 }}>{msg}</div>}
+      </div>
+    </div>
+  );
+}
+
+function RevenueChart({ revenue, onChangeMonth, year, setYear }) {
+  const series = revenueSeries(revenue, year);
+  const chartData = series.map((p, i) => ({
+    month: p.month,
+    revenue: p.value,
+    growth: i > 0 ? growthPct(series[i - 1].value, p.value) : null,
+  }));
+  const overall = overallGrowth(series);
+
+  return (
+    <div>
+      <div style={{ display: "flex", alignItems: "center", gap: 12, marginBottom: 12, flexWrap: "wrap" }}>
+        <label className="mono" style={{ fontSize: 11, color: "#9b9585" }}>ANO</label>
+        <input type="number" className="input" style={{ width: 90 }} value={year} onChange={e => setYear(Number(e.target.value) || year)} />
+        {overall != null && (
+          <span className="mono" style={{ fontSize: 12.5, color: overall >= 0 ? "var(--green)" : "var(--red)", fontWeight: 600 }}>
+            {overall >= 0 ? "▲" : "▼"} {Math.abs(overall).toFixed(1)}% de crescimento no período
+          </span>
+        )}
+      </div>
+
+      <div style={{ display: "grid", gridTemplateColumns: "repeat(6,1fr)", gap: 8, marginBottom: 16 }}>
+        {series.map(p => (
+          <div key={p.key}>
+            <div className="mono" style={{ fontSize: 10, color: "#9b9585", marginBottom: 3 }}>{p.month}</div>
+            <input className="input" type="number" style={{ width: "100%" }} placeholder="R$"
+              value={p.value ?? ""} onChange={e => onChangeMonth(p.key, e.target.value === "" ? null : Number(e.target.value))} />
+          </div>
+        ))}
+      </div>
+
+      <div style={{ height: 190 }}>
+        <ResponsiveContainer width="100%" height="100%">
+          <BarChart data={chartData}>
+            <CartesianGrid strokeDasharray="3 3" stroke="#E4DFD2" />
+            <XAxis dataKey="month" tick={{ fontSize: 11 }} />
+            <YAxis tick={{ fontSize: 10 }} />
+            <Tooltip formatter={v => fmtBRL(v)} />
+            <Bar dataKey="revenue" fill="#B8892B" radius={[3, 3, 0, 0]} />
+          </BarChart>
+        </ResponsiveContainer>
+      </div>
+
+      <div style={{ height: 140, marginTop: 10 }}>
+        <ResponsiveContainer width="100%" height="100%">
+          <LineChart data={chartData}>
+            <CartesianGrid strokeDasharray="3 3" stroke="#E4DFD2" />
+            <XAxis dataKey="month" tick={{ fontSize: 11 }} />
+            <YAxis tick={{ fontSize: 10 }} unit="%" />
+            <Tooltip formatter={v => (v == null ? "—" : v.toFixed(1) + "%")} />
+            <Line type="monotone" dataKey="growth" stroke="#1B2A4A" strokeWidth={2} dot={{ r: 3 }} connectNulls />
+          </LineChart>
+        </ResponsiveContainer>
+      </div>
+      <div className="mono" style={{ fontSize: 10.5, color: "#9b9585", marginTop: 4 }}>Linha acima: crescimento % em relação ao mês anterior.</div>
+    </div>
+  );
+}
+
+function ActivitiesManager({ activities, onChange, responsaveis }) {
+  const [title, setTitle] = useState("");
+  const [date, setDate] = useState(toISODate(new Date()));
+  const [timeStart, setTimeStart] = useState("");
+  const [timeEnd, setTimeEnd] = useState("");
+  const [status, setStatus] = useState("now");
+  const [notes, setNotes] = useState("");
+  const [responsavel, setResponsavel] = useState(responsaveis?.[0]?.id || "");
+  const [filter, setFilter] = useState("all");
+
+  function addActivity() {
+    if (!title.trim()) return;
+    onChange([...activities, { id: uid("act"), title: title.trim(), date, timeStart, timeEnd, status, notes: notes.trim(), responsavel: responsavel || null }]);
+    setTitle(""); setTimeStart(""); setTimeEnd(""); setNotes("");
+  }
+  function updateStatus(id, newStatus) {
+    onChange(activities.map(a => a.id === id ? { ...a, status: newStatus } : a));
+  }
+  function removeActivity(id) {
+    onChange(activities.filter(a => a.id !== id));
+  }
+
+  const counts = {
+    done: activities.filter(a => a.status === "done").length,
+    now: activities.filter(a => a.status === "now").length,
+    longterm: activities.filter(a => a.status === "longterm").length,
+  };
+  const chartData = [{ name: "Feito", value: counts.done }, { name: "Fazendo agora", value: counts.now }, { name: "Longo prazo", value: counts.longterm }];
+  const COLORS = ["#2F6D46", "#B8892B", "#6B5B95"];
+
+  const filtered = filter === "all" ? activities : activities.filter(a => a.status === filter);
+  const sorted = [...filtered].sort((a, b) => (b.date + (b.timeStart || "")).localeCompare(a.date + (a.timeStart || "")));
+
+  return (
+    <div>
+      <div className="card" style={{ padding: 14, marginBottom: 14 }}>
+        <div className="mono" style={{ fontSize: 11, color: "#9b9585", marginBottom: 8 }}>NOVA ATIVIDADE</div>
+        <input className="input" style={{ width: "100%", marginBottom: 8 }} placeholder="O que foi ou será feito" value={title} onChange={e => setTitle(e.target.value)} />
+        <div style={{ display: "flex", gap: 8, marginBottom: 8, flexWrap: "wrap" }}>
+          <input className="input" type="date" value={date} onChange={e => setDate(e.target.value)} />
+          <input className="input" type="time" style={{ width: 110 }} value={timeStart} onChange={e => setTimeStart(e.target.value)} title="Hora de início" />
+          <input className="input" type="time" style={{ width: 110 }} value={timeEnd} onChange={e => setTimeEnd(e.target.value)} title="Hora de término" />
+          <select className="input" value={status} onChange={e => setStatus(e.target.value)}>
+            <option value="done">Feito</option>
+            <option value="now">Fazendo agora</option>
+            <option value="longterm">Longo prazo</option>
+          </select>
+        </div>
+        <input className="input" style={{ width: "100%", marginBottom: 8 }} placeholder="Observações (opcional)" value={notes} onChange={e => setNotes(e.target.value)} />
+        {responsaveis && responsaveis.length > 0 && (
+          <select className="input" style={{ marginBottom: 8 }} value={responsavel} onChange={e => setResponsavel(e.target.value)}>
+            <option value="">Responsável (opcional)</option>
+            {responsaveis.map(r => <option key={r.id} value={r.id}>{r.name}</option>)}
+          </select>
+        )}
+        <button type="button" className="btn-gold" style={{ padding: "7px 14px", fontSize: 13, border: "none", cursor: "pointer" }} onClick={addActivity}>+ Registrar atividade</button>
+      </div>
+
+      <div style={{ display: "flex", gap: 16, marginBottom: 14, alignItems: "center", flexWrap: "wrap" }}>
+        <div style={{ height: 130, width: 200 }}>
+          <ResponsiveContainer width="100%" height="100%">
+            <PieChart>
+              <Pie data={chartData} dataKey="value" nameKey="name" innerRadius={26} outerRadius={52}>
+                {chartData.map((entry, i) => <Cell key={i} fill={COLORS[i]} />)}
+              </Pie>
+              <Tooltip />
+            </PieChart>
+          </ResponsiveContainer>
+        </div>
+        <div style={{ fontSize: 12.5, lineHeight: 1.8 }}>
+          <div><span className="dot" style={{ background: "#2F6D46" }} /> Feito: {counts.done}</div>
+          <div><span className="dot" style={{ background: "#B8892B" }} /> Fazendo agora: {counts.now}</div>
+          <div><span className="dot" style={{ background: "#6B5B95" }} /> Longo prazo: {counts.longterm}</div>
+        </div>
+      </div>
+
+      <div style={{ display: "flex", gap: 6, marginBottom: 10, flexWrap: "wrap" }}>
+        {[["all", "Todas"], ["done", "Feitas"], ["now", "Agora"], ["longterm", "Longo prazo"]].map(([k, l]) => (
+          <button key={k} type="button" onClick={() => setFilter(k)} className="input"
+            style={{ cursor: "pointer", background: filter === k ? "var(--navy)" : "#fff", color: filter === k ? "#fff" : "inherit" }}>
+            {l}
+          </button>
+        ))}
+      </div>
+
+      {sorted.length === 0 && <div style={{ fontSize: 13, color: "#9b9585" }}>Nenhuma atividade registrada.</div>}
+      {sorted.map(a => (
+        <div key={a.id} className="card" style={{ padding: 10, marginBottom: 8, borderLeft: "4px solid " + (a.status === "done" ? "#2F6D46" : a.status === "now" ? "#B8892B" : "#6B5B95") }}>
+          <div style={{ display: "flex", justifyContent: "space-between", gap: 8 }}>
+            <div>
+              <div style={{ fontWeight: 600, fontSize: 13.5 }}>{a.title}</div>
+              <div className="mono" style={{ fontSize: 11, color: "#7a7460" }}>
+                {a.date}{a.timeStart ? " · " + a.timeStart + (a.timeEnd ? "–" + a.timeEnd : "") : ""}
+                {a.timeStart && a.timeEnd ? " · " + fmtHours(durationHours(a.timeStart, a.timeEnd)) : ""}
+                {a.responsavel && responsaveis ? " · " + (responsaveis.find(r => r.id === a.responsavel)?.name || "") : ""}
+              </div>
+              {a.notes && <div style={{ fontSize: 12, color: "#524d40", marginTop: 3 }}>{a.notes}</div>}
+            </div>
+            <div style={{ display: "flex", flexDirection: "column", gap: 4, alignItems: "flex-end" }}>
+              <select className="input" style={{ fontSize: 11, padding: "3px 6px" }} value={a.status} onChange={e => updateStatus(a.id, e.target.value)}>
+                <option value="done">Feito</option>
+                <option value="now">Agora</option>
+                <option value="longterm">Longo prazo</option>
+              </select>
+              <button type="button" onClick={() => removeActivity(a.id)} style={{ background: "none", border: "none", color: "var(--red)", cursor: "pointer", fontSize: 11 }}>remover</button>
+            </div>
+          </div>
+        </div>
+      ))}
+    </div>
+  );
+}
+
+function UnitsManager({ units, onChange, monthDate, setMonthDate, responsaveis }) {
+  const [newName, setNewName] = useState("");
+  const [newManager, setNewManager] = useState("");
+  const atLimit = units.length >= MAX_UNITS_PER_CLIENT;
+
+  function addUnit() {
+    if (!newName.trim() || atLimit) return;
+    const unitId = uid("unit");
+    onChange([...units, { id: unitId, name: newName.trim(), managerName: newManager.trim(), revenue: {}, activities: [], monthlyNotes: {}, metaMensal: null, metaDiaria: null, metaSemanal: null, funcionarios: [], managerId: "mgr-" + unitId, managerPassword: "1234", managerPhoto: null, managerStatus: "" }]);
+    setNewName(""); setNewManager("");
+  }
+  function updateUnit(id, patch) {
+    onChange(units.map(u => u.id === id ? { ...u, ...patch } : u));
+  }
+  function removeUnit(id) {
+    onChange(units.filter(u => u.id !== id));
+  }
+
+  return (
+    <div>
+      <div className="card" style={{ padding: 14, marginBottom: 14 }}>
+        <div className="mono" style={{ fontSize: 11, color: "#9b9585", marginBottom: 8 }}>NOVA UNIDADE ({units.length}/{MAX_UNITS_PER_CLIENT})</div>
+        <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+          <input className="input" style={{ flex: 1, minWidth: 160 }} placeholder="Nome da unidade" value={newName} onChange={e => setNewName(e.target.value)} disabled={atLimit} />
+          <input className="input" style={{ flex: 1, minWidth: 160 }} placeholder="Gerente responsável" value={newManager} onChange={e => setNewManager(e.target.value)} disabled={atLimit} />
+          <button type="button" className="btn-gold" style={{ padding: "0 14px", border: "none", cursor: "pointer" }} disabled={atLimit} onClick={addUnit}>Adicionar</button>
+        </div>
+        {atLimit && <div style={{ fontSize: 11.5, color: "var(--red)", marginTop: 6 }}>Limite de {MAX_UNITS_PER_CLIENT} unidades atingido para este cliente.</div>}
+      </div>
+
+      {units.length === 0 && <div style={{ fontSize: 13, color: "#9b9585" }}>Nenhuma unidade cadastrada ainda.</div>}
+      {units.map(u => (
+        <UnitCard key={u.id} unit={u} onChange={patch => updateUnit(u.id, patch)} onRemove={() => removeUnit(u.id)} monthDate={monthDate} setMonthDate={setMonthDate} responsaveis={responsaveis} />
+      ))}
+    </div>
+  );
+}
+
+function UnitCard({ unit, onChange, onRemove, monthDate, setMonthDate, responsaveis }) {
+  const [open, setOpen] = useState(false);
+  const [year, setYear] = useState(currentYear());
+  const [managerPwVisible, setManagerPwVisible] = useState(false);
+  const defaultMonth = monthKey(currentYear(), new Date().getMonth());
+  const [noteMonth, setNoteMonth] = useState(defaultMonth);
+  const [noteText, setNoteText] = useState(unit.monthlyNotes?.[defaultMonth] || "");
+
+  function changeRevenueMonth(key, value) {
+    const nextRevenue = { ...unit.revenue };
+    if (value === null) delete nextRevenue[key]; else nextRevenue[key] = value;
+    onChange({ revenue: nextRevenue });
+  }
+  function changeActivities(newActivities) {
+    onChange({ activities: newActivities });
+  }
+  function selectNoteMonth(m) {
+    setNoteMonth(m);
+    setNoteText(unit.monthlyNotes?.[m] || "");
+  }
+  function saveNote() {
+    onChange({ monthlyNotes: { ...unit.monthlyNotes, [noteMonth]: noteText } });
+  }
+
+  return (
+    <div className="card" style={{ padding: 14, marginBottom: 12 }}>
+      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", flexWrap: "wrap", gap: 8 }}>
+        <div>
+          <div style={{ fontWeight: 600, fontSize: 15 }}>{unit.name}</div>
+          <div className="mono" style={{ fontSize: 11, color: "#9b9585" }}>Gerente: {unit.managerName || "—"}</div>
+        </div>
+        <div style={{ display: "flex", gap: 8 }}>
+          <button type="button" className="input" style={{ cursor: "pointer", fontSize: 12 }} onClick={() => setOpen(o => !o)}>{open ? "recolher" : "ver detalhes"}</button>
+          <button type="button" onClick={onRemove} style={{ background: "none", border: "none", color: "var(--red)", cursor: "pointer", fontSize: 12 }}>remover</button>
+        </div>
+      </div>
+
+      {open && (
+        <div style={{ marginTop: 16 }}>
+          <label style={{ fontSize: 12, color: "#665f4f" }}>Gerente / responsável pela unidade</label>
+          <input className="input" style={{ width: "100%", margin: "4px 0 8px" }} value={unit.managerName} onChange={e => onChange({ managerName: e.target.value })} />
+          <div style={{ display: "flex", gap: 8, alignItems: "center", marginBottom: 16 }}>
+            <span className="mono" style={{ fontSize: 10.5, color: "#9b9585" }}>SENHA DE ACESSO DO GERENTE</span>
+            <input className="input" style={{ width: 130 }} type={managerPwVisible ? "text" : "password"} value={unit.managerPassword || ""} onChange={e => onChange({ managerPassword: e.target.value })} />
+            <button type="button" className="input" style={{ cursor: "pointer", fontSize: 11 }} onClick={() => setManagerPwVisible(v => !v)}>{managerPwVisible ? "ocultar" : "ver"}</button>
+          </div>
+          <div className="mono" style={{ fontSize: 11, color: "#9b9585", marginBottom: 8 }}>FATURAMENTO DA UNIDADE</div>
+          <RevenueChart revenue={unit.revenue} onChangeMonth={changeRevenueMonth} year={year} setYear={setYear} />
+
+          <div className="mono" style={{ fontSize: 11, color: "#9b9585", margin: "20px 0 8px" }}>ATIVIDADES DA UNIDADE</div>
+          <ActivitiesManager activities={unit.activities} onChange={changeActivities} responsaveis={responsaveis} />
+
+          <div className="mono" style={{ fontSize: 11, color: "#9b9585", margin: "20px 0 8px" }}>VENDAS E METAS DA UNIDADE</div>
+          <VendasMetasTab
+            metaMensal={unit.metaMensal}
+            onChangeMeta={v => onChange({ metaMensal: v })}
+            metaDiaria={unit.metaDiaria}
+            onChangeMetaDiaria={v => onChange({ metaDiaria: v })}
+            metaSemanal={unit.metaSemanal}
+            onChangeMetaSemanal={v => onChange({ metaSemanal: v })}
+            funcionarios={unit.funcionarios}
+            onChangeFuncionarios={list => onChange({ funcionarios: list })}
+            monthDate={monthDate} setMonthDate={setMonthDate}
+            label={unit.name}
+          />
+
+          <div className="mono" style={{ fontSize: 11, color: "#9b9585", margin: "20px 0 8px" }}>NOTA MENSAL PARA A GERÊNCIA</div>
+          <input className="input" type="month" style={{ marginBottom: 8 }} value={noteMonth} onChange={e => selectNoteMonth(e.target.value)} />
+          <textarea className="input" style={{ width: "100%", minHeight: 70, marginBottom: 8 }} placeholder="Avaliação do mês: crescimento, dificuldades, plano de ação…" value={noteText} onChange={e => setNoteText(e.target.value)} />
+          <button type="button" className="btn-primary" style={{ padding: "7px 14px", fontSize: 13 }} onClick={saveNote}>Salvar nota do mês</button>
+        </div>
+      )}
+    </div>
+  );
+}
+
+function GoalPill({ label, value }) {
+  return (
+    <div className="card" style={{ padding: "6px 10px" }}>
+      <div className="mono" style={{ fontSize: 9.5, color: "#9b9585" }}>{label.toUpperCase()}</div>
+      <div className="mono" style={{ fontSize: 12, fontWeight: 600 }}>{value == null ? "—" : fmtBRL(value)}</div>
+    </div>
+  );
+}
+
+function SalesCalendar({ funcionario, onChangeSales, monthDate }) {
+  const year = monthDate.getFullYear();
+  const monthIdx = monthDate.getMonth();
+  const cells = buildMonthGrid(monthDate);
+  const workDays = funcionario.workDays && funcionario.workDays.length ? funcionario.workDays : DEFAULT_WORKDAYS;
+  const goals = computeGoalBreakdown(funcionario.metaMensal, year, monthIdx, workDays);
+  const monthTotal = sumSalesForMonth(funcionario.sales, year, monthIdx);
+  const [editingDay, setEditingDay] = useState(null);
+  const [draftValue, setDraftValue] = useState("");
+  const today = new Date();
+
+  function openDay(day) {
+    const key = toISODate(day);
+    setEditingDay(key);
+    setDraftValue(funcionario.sales?.[key] != null ? String(funcionario.sales[key]) : "");
+  }
+  function saveDay() {
+    const nextSales = { ...funcionario.sales };
+    if (draftValue === "") delete nextSales[editingDay]; else nextSales[editingDay] = Number(draftValue);
+    onChangeSales(nextSales);
+    setEditingDay(null);
+  }
+
+  const met = funcionario.metaMensal != null && monthTotal >= funcionario.metaMensal;
+  const { pct, remaining } = pctRemaining(monthTotal, funcionario.metaMensal);
+
+  return (
+    <div>
+      <div style={{ display: "flex", gap: 8, flexWrap: "wrap", marginBottom: 12 }}>
+        <GoalPill label="Diária" value={goals.diaria} />
+        <GoalPill label="Semanal" value={goals.semanal} />
+        <GoalPill label="Quinzenal (1ª)" value={goals.quinzenal1} />
+        <GoalPill label="Quinzenal (2ª)" value={goals.quinzenal2} />
+        <GoalPill label="Mensal" value={funcionario.metaMensal} />
+      </div>
+
+      <div style={{ display: "grid", gridTemplateColumns: "repeat(7,1fr)", gap: 4, marginBottom: 6 }}>
+        {WEEKDAY_LABELS.map(d => <div key={d} className="mono" style={{ fontSize: 10, textAlign: "center", color: "#9b9585", textTransform: "uppercase" }}>{d}</div>)}
+      </div>
+      <div style={{ display: "grid", gridTemplateColumns: "repeat(7,1fr)", gap: 4 }}>
+        {cells.map((day, i) => {
+          if (!day) return <div key={i} style={{ opacity: 0.15 }} />;
+          const key = toISODate(day);
+          const value = funcionario.sales?.[key];
+          const isWorkDay = workDays.includes(day.getDay());
+          const isToday = sameDay(day, today);
+          let bg = "#fff";
+          if (value != null && goals.diaria != null) bg = value >= goals.diaria ? "var(--green-soft)" : "var(--red-soft)";
+          return (
+            <div key={i} className={"daycell" + (isToday ? " today" : "")}
+              style={{ padding: 4, cursor: "pointer", background: bg, opacity: isWorkDay ? 1 : 0.5 }}
+              onClick={() => openDay(day)}>
+              <div className="mono" style={{ fontSize: 10, color: "#7a7460" }}>{day.getDate()}</div>
+              {value != null && <div className="mono" style={{ fontSize: 9.5, marginTop: 2 }}>{fmtBRL(value)}</div>}
+            </div>
+          );
+        })}
+      </div>
+
+      <div style={{ marginTop: 12, display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap" }}>
+        <span className="mono" style={{ fontSize: 11, color: "#9b9585" }}>TOTAL DO MÊS</span>
+        <span className="mono" style={{ fontWeight: 700, fontSize: 14, color: funcionario.metaMensal != null ? (met ? "var(--green)" : "var(--red)") : "var(--navy)" }}>
+          {fmtBRL(monthTotal)}
+        </span>
+        {funcionario.metaMensal != null && (
+          <span style={{ fontSize: 11.5, color: "#7a7460" }}>
+            {met ? "🟢" : "🔴"} {pct.toFixed(0)}% da meta · falta {fmtBRL(remaining)}
+          </span>
+        )}
+      </div>
+
+      {editingDay && (
+        <div style={{ position: "fixed", inset: 0, background: "rgba(20,18,12,0.45)", display: "flex", alignItems: "center", justifyContent: "center", zIndex: 60 }} onClick={() => setEditingDay(null)}>
+          <div className="card" style={{ padding: 18, width: 260 }} onClick={e => e.stopPropagation()}>
+            <div className="mono" style={{ fontSize: 11, color: "#9b9585", marginBottom: 8 }}>{editingDay}</div>
+            <label style={{ fontSize: 12, color: "#665f4f" }}>Valor vendido no dia</label>
+            <input className="input" type="number" style={{ width: "100%", margin: "6px 0 12px" }} value={draftValue}
+              onChange={e => setDraftValue(e.target.value)}
+              onKeyDown={e => { if (e.key === "Enter") saveDay(); }} autoFocus />
+            <div style={{ display: "flex", gap: 8, justifyContent: "flex-end" }}>
+              <button type="button" onClick={() => setEditingDay(null)} style={{ padding: "6px 12px", fontSize: 12, background: "none", border: "1px solid var(--line)", borderRadius: 3, cursor: "pointer" }}>Cancelar</button>
+              <button type="button" className="btn-primary" style={{ padding: "6px 12px", fontSize: 12, border: "none", cursor: "pointer" }} onClick={saveDay}>Salvar</button>
+            </div>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+function FuncionariosManager({ funcionarios, onChange, monthDate }) {
+  const [name, setName] = useState("");
+  const [workDays, setWorkDays] = useState(DEFAULT_WORKDAYS);
+  const [metaMensal, setMetaMensal] = useState("");
+  const [openId, setOpenId] = useState(null);
+  const [revealPw, setRevealPw] = useState({});
+
+  function toggleWorkDay(d) {
+    setWorkDays(prev => prev.includes(d) ? prev.filter(x => x !== d) : [...prev, d].sort());
+  }
+  function addFuncionario() {
+    if (!name.trim() || workDays.length === 0) return;
+    onChange([...funcionarios, { id: uid("func"), name: name.trim(), workDays: [...workDays], metaMensal: metaMensal === "" ? null : Number(metaMensal), sales: {}, password: "1234" }]);
+    setName(""); setMetaMensal(""); setWorkDays(DEFAULT_WORKDAYS);
+  }
+  function updateFuncionario(id, patch) {
+    onChange(funcionarios.map(f => f.id === id ? { ...f, ...patch } : f));
+  }
+  function removeFuncionario(id) {
+    onChange(funcionarios.filter(f => f.id !== id));
+  }
+
+  const year = monthDate.getFullYear();
+  const monthIdx = monthDate.getMonth();
+
+  return (
+    <div>
+      <div className="card" style={{ padding: 14, marginBottom: 14 }}>
+        <div className="mono" style={{ fontSize: 11, color: "#9b9585", marginBottom: 8 }}>NOVO FUNCIONÁRIO</div>
+        <input className="input" style={{ width: "100%", marginBottom: 8 }} placeholder="Nome do funcionário" value={name} onChange={e => setName(e.target.value)} />
+        <div style={{ display: "flex", gap: 10, marginBottom: 8, alignItems: "center", flexWrap: "wrap" }}>
+          <input className="input" type="number" style={{ width: 150 }} placeholder="Meta mensal (R$)" value={metaMensal} onChange={e => setMetaMensal(e.target.value)} />
+          <div style={{ display: "flex", gap: 5 }}>
+            {WEEKDAY_LABELS.map((lbl, idx) => (
+              <label key={idx} className="mono" style={{ fontSize: 10, display: "flex", flexDirection: "column", alignItems: "center", cursor: "pointer", textTransform: "uppercase" }}>
+                <input type="checkbox" checked={workDays.includes(idx)} onChange={() => toggleWorkDay(idx)} />
+                {lbl}
+              </label>
+            ))}
+          </div>
+        </div>
+        <button type="button" className="btn-gold" style={{ padding: "7px 14px", fontSize: 13, border: "none", cursor: "pointer" }} onClick={addFuncionario}>+ Cadastrar funcionário</button>
+        <div className="mono" style={{ fontSize: 10.5, color: "#9b9585", marginTop: 6 }}>Já cadastra com acesso próprio ao sistema (senha inicial 1234, pode trocar depois).</div>
+      </div>
+
+      {funcionarios.length === 0 && <div style={{ fontSize: 13, color: "#9b9585" }}>Nenhum funcionário cadastrado ainda.</div>}
+      {funcionarios.map(f => {
+        const total = sumSalesForMonth(f.sales, year, monthIdx);
+        const met = f.metaMensal != null && total >= f.metaMensal;
+        const { pct, remaining } = pctRemaining(total, f.metaMensal);
+        const open = openId === f.id;
+        return (
+          <div key={f.id} className="card" style={{ padding: 14, marginBottom: 10 }}>
+            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", flexWrap: "wrap", gap: 8 }}>
+              <div>
+                <div style={{ fontWeight: 600, fontSize: 14 }}>{f.name}</div>
+                <div className="mono" style={{ fontSize: 11, color: f.metaMensal != null ? (met ? "var(--green)" : "var(--red)") : "#9b9585" }}>
+                  {fmtBRL(total)}{f.metaMensal != null ? ` · ${pct.toFixed(0)}% da meta · falta ${fmtBRL(remaining)}` : ""}
+                </div>
+              </div>
+              <div style={{ display: "flex", gap: 8 }}>
+                <ReportButton label="📄 Relatório" buildReport={() => ({
+                  title: "Relatório individual — " + f.name,
+                  subtitle: monthLabel(monthDate),
+                  filename: "relatorio-" + f.name.replace(/\s+/g, "-").toLowerCase(),
+                  sections: [
+                    { heading: "Vendas do mês", rows: [
+                      ["Total vendido", fmtBRL(total)],
+                      ["Meta mensal", f.metaMensal != null ? fmtBRL(f.metaMensal) : "—"],
+                      ["% da meta", f.metaMensal != null ? pct.toFixed(0) + "%" : "—"],
+                    ] },
+                    { heading: "Pontuação do mês", rows: [
+                      ["Total de pontos", String(sumPointsForMonth(f.pontos, year, monthIdx))],
+                    ] },
+                  ],
+                })} />
+                <button type="button" className="input" style={{ cursor: "pointer", fontSize: 12 }} onClick={() => setOpenId(open ? null : f.id)}>{open ? "recolher" : "ver calendário"}</button>
+                <button type="button" onClick={() => removeFuncionario(f.id)} style={{ background: "none", border: "none", color: "var(--red)", cursor: "pointer", fontSize: 12 }}>remover</button>
+              </div>
+            </div>
+            {open && (
+              <div style={{ marginTop: 14 }}>
+                <div style={{ display: "flex", gap: 8, marginBottom: 8, flexWrap: "wrap" }}>
+                  <input className="input" style={{ flex: 1, minWidth: 140 }} value={f.name} onChange={e => updateFuncionario(f.id, { name: e.target.value })} />
+                  <input className="input" type="number" style={{ width: 150 }} value={f.metaMensal ?? ""} placeholder="Meta mensal" onChange={e => updateFuncionario(f.id, { metaMensal: e.target.value === "" ? null : Number(e.target.value) })} />
+                </div>
+                <div style={{ display: "flex", gap: 8, marginBottom: 12, alignItems: "center" }}>
+                  <span className="mono" style={{ fontSize: 10.5, color: "#9b9585" }}>SENHA DE ACESSO</span>
+                  <input className="input" style={{ width: 130 }} type={revealPw[f.id] ? "text" : "password"} value={f.password || ""} onChange={e => updateFuncionario(f.id, { password: e.target.value })} />
+                  <button type="button" className="input" style={{ cursor: "pointer", fontSize: 11 }} onClick={() => setRevealPw(p => ({ ...p, [f.id]: !p[f.id] }))}>{revealPw[f.id] ? "ocultar" : "ver"}</button>
+                </div>
+                <SalesCalendar funcionario={f} monthDate={monthDate} onChangeSales={sales => updateFuncionario(f.id, { sales })} />
+              </div>
+            )}
+          </div>
+        );
+      })}
+    </div>
+  );
+}
+
+function VendasMetasTab({
+  metaMensal, onChangeMeta,
+  metaDiaria, onChangeMetaDiaria,
+  metaSemanal, onChangeMetaSemanal,
+  funcionarios, onChangeFuncionarios,
+  monthDate, setMonthDate, extraTotal = 0, label, extraVendedores = [],
+}) {
+  const year = monthDate.getFullYear();
+  const monthIdx = monthDate.getMonth();
+  const today = new Date();
+  const funcTotal = funcionarios.reduce((sum, f) => sum + sumSalesForMonth(f.sales, year, monthIdx), 0);
+  const total = funcTotal + extraTotal;
+  const met = metaMensal != null && total >= metaMensal;
+  const mensalStats = pctRemaining(total, metaMensal);
+
+  const todayTotal = funcionarios.reduce((sum, f) => sum + sumSalesForDay(f.sales, toISODate(today)), 0);
+  const diariaStats = pctRemaining(todayTotal, metaDiaria);
+  const diariaMet = metaDiaria != null && todayTotal >= metaDiaria;
+
+  const weekTotal = funcionarios.reduce((sum, f) => sum + sumSalesForWeek(f.sales, today), 0);
+  const semanalStats = pctRemaining(weekTotal, metaSemanal);
+  const semanalMet = metaSemanal != null && weekTotal >= metaSemanal;
+
+  const autoDiaria = funcionarios.reduce((sum, f) => {
+    const g = computeGoalBreakdown(f.metaMensal, year, monthIdx, f.workDays || DEFAULT_WORKDAYS);
+    return sum + (g.diaria || 0);
+  }, 0);
+  const autoSemanal = funcionarios.reduce((sum, f) => {
+    const g = computeGoalBreakdown(f.metaMensal, year, monthIdx, f.workDays || DEFAULT_WORKDAYS);
+    return sum + (g.semanal || 0);
+  }, 0);
+
+  return (
+    <div>
+      <div style={{ display: "flex", alignItems: "center", gap: 10, margin: "0 0 14px" }}>
+        <button onClick={() => setMonthDate(new Date(monthDate.getFullYear(), monthDate.getMonth() - 1, 1))} className="input" style={{ padding: "4px 10px", cursor: "pointer" }}>‹</button>
+        <div className="mono" style={{ fontSize: 13, textTransform: "capitalize", minWidth: 140, textAlign: "center" }}>{monthLabel(monthDate)}</div>
+        <button onClick={() => setMonthDate(new Date(monthDate.getFullYear(), monthDate.getMonth() + 1, 1))} className="input" style={{ padding: "4px 10px", cursor: "pointer" }}>›</button>
+      </div>
+
+      <div className="mono" style={{ fontSize: 11, color: "#9b9585", margin: "0 0 8px" }}>METAS{label ? " · " + label.toUpperCase() : ""}</div>
+      <div style={{ display: "flex", gap: 12, flexWrap: "wrap", marginBottom: 18 }}>
+        <div className="card" style={{ padding: 14, flex: 1, minWidth: 220 }}>
+          <div className="mono" style={{ fontSize: 10.5, color: "#9b9585" }}>META DIÁRIA (hoje)</div>
+          <input className="input" type="number" style={{ width: "100%", marginTop: 4, marginBottom: 6 }} value={metaDiaria ?? ""} placeholder="R$" onChange={e => onChangeMetaDiaria(e.target.value === "" ? null : Number(e.target.value))} />
+          <div className="mono" style={{ fontSize: 15, fontWeight: 700, color: metaDiaria != null ? (diariaMet ? "var(--green)" : "var(--red)") : "var(--navy)" }}>{fmtBRL(todayTotal)}</div>
+          {metaDiaria != null && <div style={{ fontSize: 11, color: "#7a7460" }}>{diariaMet ? "🟢" : "🔴"} {diariaStats.pct.toFixed(0)}% · falta {fmtBRL(diariaStats.remaining)}</div>}
+          {autoDiaria > 0 && <div className="mono" style={{ fontSize: 10, color: "#9b9585", marginTop: 4 }}>soma das metas dos vendedores: {fmtBRL(autoDiaria)}</div>}
+        </div>
+        <div className="card" style={{ padding: 14, flex: 1, minWidth: 220 }}>
+          <div className="mono" style={{ fontSize: 10.5, color: "#9b9585" }}>META SEMANAL (esta semana)</div>
+          <input className="input" type="number" style={{ width: "100%", marginTop: 4, marginBottom: 6 }} value={metaSemanal ?? ""} placeholder="R$" onChange={e => onChangeMetaSemanal(e.target.value === "" ? null : Number(e.target.value))} />
+          <div className="mono" style={{ fontSize: 15, fontWeight: 700, color: metaSemanal != null ? (semanalMet ? "var(--green)" : "var(--red)") : "var(--navy)" }}>{fmtBRL(weekTotal)}</div>
+          {metaSemanal != null && <div style={{ fontSize: 11, color: "#7a7460" }}>{semanalMet ? "🟢" : "🔴"} {semanalStats.pct.toFixed(0)}% · falta {fmtBRL(semanalStats.remaining)}</div>}
+          {autoSemanal > 0 && <div className="mono" style={{ fontSize: 10, color: "#9b9585", marginTop: 4 }}>soma das metas dos vendedores: {fmtBRL(autoSemanal)}</div>}
+        </div>
+        <div className="card" style={{ padding: 14, flex: 1, minWidth: 220 }}>
+          <div className="mono" style={{ fontSize: 10.5, color: "#9b9585" }}>META MENSAL</div>
+          <input className="input" type="number" style={{ width: "100%", marginTop: 4, marginBottom: 6 }} value={metaMensal ?? ""} placeholder="R$" onChange={e => onChangeMeta(e.target.value === "" ? null : Number(e.target.value))} />
+          <div className="mono" style={{ fontSize: 15, fontWeight: 700, color: metaMensal != null ? (met ? "var(--green)" : "var(--red)") : "var(--navy)" }}>{fmtBRL(total)}</div>
+          {metaMensal != null && <div style={{ fontSize: 11, color: "#7a7460" }}>{met ? "🟢" : "🔴"} {mensalStats.pct.toFixed(0)}% · falta {fmtBRL(mensalStats.remaining)}</div>}
+          {extraTotal > 0 && <div style={{ fontSize: 10.5, color: "#7a7460", marginTop: 4 }}>inclui {fmtBRL(extraTotal)} das unidades</div>}
+        </div>
+      </div>
+
+      <div className="mono" style={{ fontSize: 11, color: "#9b9585", margin: "0 0 8px" }}>FUNCIONÁRIOS</div>
+      <FuncionariosManager funcionarios={funcionarios} onChange={onChangeFuncionarios} monthDate={monthDate} />
+
+      <div className="mono" style={{ fontSize: 11, color: "#9b9585", margin: "22px 0 10px" }}>RANKING DE VENDEDORES</div>
+      <VendedorRankings vendedores={[...funcionarios.map(f => ({ ...f, ownerLabel: label })), ...extraVendedores]} monthDate={monthDate} />
+    </div>
+  );
+}
+
+function RankingBoard({ rows, formatValue, title }) {
+  const top3 = rows.slice(0, 3);
+  const rest = rows.slice(3);
+  const medals = ["🥇", "🥈", "🥉"];
+  return (
+    <div>
+      {title && <div className="mono" style={{ fontSize: 11, color: "#9b9585", marginBottom: 10 }}>{title.toUpperCase()}</div>}
+      {rows.length === 0 && <div style={{ fontSize: 12.5, color: "#9b9585" }}>Sem dados suficientes ainda.</div>}
+      {top3.length > 0 && (
+        <div style={{ display: "flex", gap: 8, marginBottom: 12, alignItems: "flex-end", flexWrap: "wrap" }}>
+          {top3.map((r, i) => (
+            <div key={r.id} className="card" style={{ padding: "10px 14px", textAlign: "center", minWidth: 100, background: i === 0 ? "var(--gold-soft)" : "#fff" }}>
+              <div style={{ fontSize: 20 }}>{medals[i]}</div>
+              <div style={{ fontWeight: 600, fontSize: 12.5 }}>{r.name}</div>
+              {r.sub && <div className="mono" style={{ fontSize: 9.5, color: "#9b9585" }}>{r.sub}</div>}
+              <div className="mono" style={{ fontSize: 12.5, fontWeight: 700, marginTop: 4 }}>{formatValue(r.value)}</div>
+            </div>
+          ))}
+        </div>
+      )}
+      {rest.map((r, i) => (
+        <div key={r.id} className="card" style={{ padding: "7px 12px", marginBottom: 5, display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+          <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
+            <span className="mono" style={{ fontSize: 11, color: "#9b9585", width: 20 }}>{i + 4}º</span>
+            <span style={{ fontSize: 12.5 }}>{r.name}</span>
+            {r.sub && <span className="mono" style={{ fontSize: 9.5, color: "#9b9585" }}>({r.sub})</span>}
+          </div>
+          <span className="mono" style={{ fontSize: 12 }}>{formatValue(r.value)}</span>
+        </div>
+      ))}
+    </div>
+  );
+}
+
+function VendedorRankings({ vendedores, monthDate }) {
+  const year = monthDate.getFullYear();
+  const monthIdx = monthDate.getMonth();
+  const withTotals = vendedores.map(v => ({ id: v.id, name: v.name, sub: v.ownerLabel, total: sumSalesForMonth(v.sales, year, monthIdx), meta: v.metaMensal }));
+  const byValue = [...withTotals].sort((a, b) => b.total - a.total).map(v => ({ id: v.id, name: v.name, sub: v.sub, value: v.total }));
+  const byPct = withTotals.filter(v => v.meta != null && v.meta > 0)
+    .map(v => ({ id: v.id, name: v.name, sub: v.sub, value: (v.total / v.meta) * 100 }))
+    .sort((a, b) => b.value - a.value);
+  const chartData = byValue.slice(0, 8).map(v => ({ name: v.name, valor: v.value }));
+
+  return (
+    <div>
+      {chartData.length > 0 && (
+        <div style={{ height: Math.max(chartData.length * 32, 120), marginBottom: 20 }}>
+          <ResponsiveContainer width="100%" height="100%">
+            <BarChart data={chartData} layout="vertical" margin={{ left: 10 }}>
+              <CartesianGrid strokeDasharray="3 3" stroke="#E4DFD2" />
+              <XAxis type="number" tick={{ fontSize: 10 }} />
+              <YAxis type="category" dataKey="name" tick={{ fontSize: 11 }} width={100} />
+              <Tooltip formatter={v => fmtBRL(v)} />
+              <Bar dataKey="valor" fill="#1B2A4A" radius={[0, 3, 3, 0]} />
+            </BarChart>
+          </ResponsiveContainer>
+        </div>
+      )}
+      <div style={{ display: "flex", gap: 20, flexWrap: "wrap" }}>
+        <div style={{ flex: 1, minWidth: 260 }}>
+          <RankingBoard rows={byValue} title="Ranking por valor vendido" formatValue={fmtBRL} />
+        </div>
+        <div style={{ flex: 1, minWidth: 260 }}>
+          <RankingBoard rows={byPct} title="Ranking por % da meta atingida" formatValue={v => v.toFixed(0) + "%"} />
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function NetworkPanel({ data, persist }) {
+  const [monthDate, setMonthDate] = useState(new Date());
+  const year = monthDate.getFullYear();
+  const monthIdx = monthDate.getMonth();
+  const monthKeyStr = monthKey(year, monthIdx);
+
+  function clientTotal(client) {
+    const own = client.funcionarios.reduce((s, f) => s + sumSalesForMonth(f.sales, year, monthIdx), 0);
+    const units = client.units.reduce((s, u) => s + u.funcionarios.reduce((s2, f) => s2 + sumSalesForMonth(f.sales, year, monthIdx), 0), 0);
+    return own + units;
+  }
+
+  const rows = data.clients.map(c => ({ id: c.id, name: c.name, total: clientTotal(c), meta: c.metaMensal })).sort((a, b) => b.total - a.total);
+  const networkTotal = rows.reduce((s, r) => s + r.total, 0);
+  const networkMeta = data.networkMetaMensal?.[monthKeyStr] ?? null;
+  const met = networkMeta != null && networkTotal >= networkMeta;
+  const networkAlerts = computeAlerts(data.clients.flatMap(c => collectVendedores(c)));
+
+  function buildNetworkReport() {
+    return {
+      title: "Relatório Geral da Rede",
+      subtitle: monthLabel(monthDate),
+      filename: "relatorio-rede-" + monthKeyStr,
+      sections: [
+        { heading: "Rede", rows: [
+          ["Total vendido pela rede", fmtBRL(networkTotal)],
+          ["Meta da rede", networkMeta != null ? fmtBRL(networkMeta) : "—"],
+        ] },
+        { heading: "Clientes (top 10 do mês)", rows: rows.slice(0, 10).map(r => [r.name, fmtBRL(r.total)]) },
+        { heading: "Alertas ativos", rows: networkAlerts.length ? networkAlerts.map(a => [a.name + (a.sub ? " (" + a.sub + ")" : ""), a.message]) : [["Nenhum alerta no momento", ""]] },
+      ],
+    };
+  }
+  const networkStats = pctRemaining(networkTotal, networkMeta);
+  const allVendedores = data.clients.flatMap(c => collectVendedores(c));
+
+  async function setNetworkMeta(v) {
+    await persist({ ...data, networkMetaMensal: { ...(data.networkMetaMensal || {}), [monthKeyStr]: v } });
+  }
+
+  return (
+    <div>
+      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", gap: 12, flexWrap: "wrap" }}>
+        <div>
+          <h2 className="disp" style={{ fontSize: 24, margin: 0, color: "var(--navy)" }}>Painel da Rede</h2>
+          <p style={{ fontSize: 13, color: "#6d6754", margin: "4px 0 16px", maxWidth: 500 }}>
+            Soma automática de todos os clientes, unidades e funcionários — nada aqui é lançado manualmente.
+          </p>
+        </div>
+        <ReportButton label="📄 Relatório geral da rede" buildReport={buildNetworkReport} />
+      </div>
+
+      <AlertsBanner alerts={networkAlerts} />
+
+      <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 16 }}>
+        <button onClick={() => setMonthDate(new Date(year, monthIdx - 1, 1))} className="input" style={{ padding: "4px 10px", cursor: "pointer" }}>‹</button>
+        <div className="mono" style={{ fontSize: 13, textTransform: "capitalize", minWidth: 140, textAlign: "center" }}>{monthLabel(monthDate)}</div>
+        <button onClick={() => setMonthDate(new Date(year, monthIdx + 1, 1))} className="input" style={{ padding: "4px 10px", cursor: "pointer" }}>›</button>
+      </div>
+
+      <div className="card" style={{ padding: 16, marginBottom: 20, display: "flex", gap: 26, flexWrap: "wrap", alignItems: "center" }}>
+        <div>
+          <div className="mono" style={{ fontSize: 10.5, color: "#9b9585" }}>META DA REDE NO MÊS</div>
+          <input className="input" type="number" style={{ width: 170, marginTop: 4 }} value={networkMeta ?? ""} placeholder="R$" onChange={e => setNetworkMeta(e.target.value === "" ? null : Number(e.target.value))} />
+        </div>
+        <div>
+          <div className="mono" style={{ fontSize: 10.5, color: "#9b9585" }}>TOTAL VENDIDO PELA REDE</div>
+          <div className="mono" style={{ fontSize: 21, fontWeight: 700, marginTop: 4, color: networkMeta != null ? (met ? "var(--green)" : "var(--red)") : "var(--navy)" }}>{fmtBRL(networkTotal)}</div>
+        </div>
+        {networkMeta != null && (
+          <div style={{ fontSize: 13.5, fontWeight: 600, color: met ? "var(--green)" : "var(--red)" }}>
+            {met ? "🟢" : "🔴"} {networkStats.pct.toFixed(0)}% da meta · falta {fmtBRL(networkStats.remaining)}
+          </div>
+        )}
+      </div>
+
+      <div className="mono" style={{ fontSize: 11, color: "#9b9585", marginBottom: 8 }}>RANKING DE CLIENTES NO MÊS</div>
+      {rows.map((r, i) => {
+        const rMet = r.meta != null && r.total >= r.meta;
+        const rStats = pctRemaining(r.total, r.meta);
+        return (
+          <div key={r.id} className="card" style={{ padding: "10px 14px", marginBottom: 6, display: "flex", justifyContent: "space-between", alignItems: "center", flexWrap: "wrap", gap: 6 }}>
+            <div style={{ display: "flex", gap: 10, alignItems: "center" }}>
+              <span className="mono" style={{ fontSize: 12, color: "#9b9585", width: 22 }}>{i + 1}º</span>
+              <span style={{ fontSize: 13.5, fontWeight: 500 }}>{r.name}</span>
+            </div>
+            <div style={{ display: "flex", gap: 10, alignItems: "center" }}>
+              {r.meta != null && <span className="mono" style={{ fontSize: 11, color: rMet ? "var(--green)" : "var(--red)" }}>{rMet ? "🟢" : "🔴"} {rStats.pct.toFixed(0)}%</span>}
+              <span className="mono" style={{ fontSize: 13 }}>{fmtBRL(r.total)}</span>
+            </div>
+          </div>
+        );
+      })}
+
+      <div className="mono" style={{ fontSize: 11, color: "#9b9585", margin: "24px 0 8px" }}>RANKING DE VENDEDORES DA REDE</div>
+      <VendedorRankings vendedores={allVendedores} monthDate={monthDate} />
+    </div>
+  );
+}
+
+function ClientDetail({ client, data, persist, isDirector, currentUser, monthDate, setMonthDate, selectedDay, setSelectedDay, modalOpen, setModalOpen, modalDefaults, setModalDefaults }) {
+  const [tab, setTab] = useState("agenda");
+  const [year, setYear] = useState(currentYear());
+
+  async function updateClientField(patch) {
+    await persist({ ...data, clients: data.clients.map(c => c.id === client.id ? { ...c, ...patch } : c) });
+  }
+  function changeRevenueMonth(key, value) {
+    const nextRevenue = { ...client.revenue };
+    if (value === null) delete nextRevenue[key]; else nextRevenue[key] = value;
+    updateClientField({ revenue: nextRevenue });
+  }
+  function changeActivities(newActivities) {
+    updateClientField({ activities: newActivities });
+  }
+  function changeUnits(newUnits) {
+    updateClientField({ units: newUnits });
+  }
+  const responsaveis = [{ id: "director", name: data.director.name }].concat(data.employees.filter(e => e.active).map(e => ({ id: e.id, name: e.name })));
+
+  const allVendedores = collectVendedores(client);
+  const alerts = computeAlerts(allVendedores);
+
+  function buildClientReport() {
+    const year = monthDate.getFullYear(), monthIdx = monthDate.getMonth();
+    const revTotal = Object.entries(client.revenue || {}).filter(([k]) => k.startsWith(monthKey(year, monthIdx))).reduce((s, [, v]) => s + (v || 0), 0);
+    const salesTotal = allVendedores.reduce((s, f) => s + sumSalesForMonth(f.sales, year, monthIdx), 0);
+    const doneActs = client.activities.filter(a => a.status === "done").length;
+    return {
+      title: "Relatório — " + client.name,
+      subtitle: monthLabel(monthDate),
+      filename: "relatorio-" + client.name.replace(/\s+/g, "-").toLowerCase(),
+      sections: [
+        { heading: "Faturamento", rows: [["Faturamento informado no mês", fmtBRL(revTotal)]] },
+        { heading: "Vendas & metas", rows: [
+          ["Total vendido no mês (vendedores)", fmtBRL(salesTotal)],
+          ["Meta mensal da empresa", client.metaMensal != null ? fmtBRL(client.metaMensal) : "—"],
+          ["Vendedores cadastrados", String(allVendedores.length)],
+        ] },
+        { heading: "Atividades de consultoria", rows: [
+          ["Atividades concluídas", String(doneActs)],
+          ["Atividades em aberto", String(client.activities.length - doneActs)],
+        ] },
+        { heading: "Contrato", rows: [
+          ["Início", client.contractStart || "—"],
+          ["Fim", client.contractEnd || "—"],
+          ["Próximo pagamento", client.paymentDate || "—"],
+        ] },
+        { heading: "Unidades", rows: client.units.length ? client.units.map(u => [u.name, "gerente: " + (u.managerName || "—")]) : [["Nenhuma unidade cadastrada", ""]] },
+      ],
+    };
+  }
+
+  return (
+    <div>
+      <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 12, marginBottom: 6, flexWrap: "wrap" }}>
+        <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
+          <Avatar person={client} size={44} />
+          <div>
+            <h2 className="disp" style={{ fontSize: 22, margin: 0, color: "var(--navy)" }}>{client.name}</h2>
+            {client.status && <div style={{ fontSize: 12.5, color: "#6d6754" }}>{client.status}</div>}
+          </div>
+        </div>
+        <ReportButton label="📄 Relatório da empresa" buildReport={buildClientReport} />
+      </div>
+
+      <AlertsBanner alerts={alerts} />
+
+      <div style={{ display: "flex", gap: 4, margin: "16px 0 18px", borderBottom: "1px solid var(--line)", flexWrap: "wrap" }}>
+        {[["agenda", "Agenda"], ["faturamento", "Faturamento"], ["atividades", "Atividades"], ["vendas", "Vendas & Metas"], ["pontuacao", "Pontuação"], ["contrato", "Contrato"], ["unidades", `Unidades (${client.units.length})`]].map(([k, l]) => (
+          <button key={k} type="button" onClick={() => setTab(k)}
+            style={{
+              padding: "8px 14px", fontSize: 13, background: "none", border: "none", cursor: "pointer",
+              borderBottom: tab === k ? "2px solid var(--gold)" : "2px solid transparent",
+              fontWeight: tab === k ? 600 : 400, color: tab === k ? "var(--navy)" : "#7a7460",
+            }}>
+            {l}
+          </button>
+        ))}
+      </div>
+
+      {tab === "agenda" && (
+        <AgendaView
+          title={`Agenda de ${client.name}`}
+          subtitle="Compromissos marcados para este cliente na agenda da empresa, mais anotações diretas."
+          scope="client"
+          employeeId={client.id}
+          data={data} persist={persist}
+          monthDate={monthDate} setMonthDate={setMonthDate}
+          currentUser={currentUser}
+          selectedDay={selectedDay} setSelectedDay={setSelectedDay}
+          modalOpen={modalOpen} setModalOpen={setModalOpen}
+          modalDefaults={modalDefaults} setModalDefaults={setModalDefaults}
+        />
+      )}
+
+      {tab === "faturamento" && (
+        <div>
+          <h3 className="disp" style={{ fontSize: 18, color: "var(--navy)", margin: "0 0 10px" }}>Faturamento mensal</h3>
+          <RevenueChart revenue={client.revenue} onChangeMonth={changeRevenueMonth} year={year} setYear={setYear} />
+        </div>
+      )}
+
+      {tab === "atividades" && (
+        <div>
+          <h3 className="disp" style={{ fontSize: 18, color: "var(--navy)", margin: "0 0 10px" }}>Atividades de consultoria</h3>
+          <ActivitiesManager activities={client.activities} onChange={changeActivities} responsaveis={responsaveis} />
+        </div>
+      )}
+
+      {tab === "vendas" && (
+        <div>
+          <h3 className="disp" style={{ fontSize: 18, color: "var(--navy)", margin: "0 0 10px" }}>Vendas & metas</h3>
+          <p style={{ fontSize: 12.5, color: "#6d6754", margin: "0 0 14px", maxWidth: 480 }}>
+            Cadastre os funcionários de vendas do cliente. Cada lançamento diário deles soma automaticamente aqui, nas unidades e no painel da rede — não precisa lançar em mais de um lugar.
+          </p>
+          <VendasMetasTab
+            metaMensal={client.metaMensal}
+            onChangeMeta={v => updateClientField({ metaMensal: v })}
+            metaDiaria={client.metaDiaria}
+            onChangeMetaDiaria={v => updateClientField({ metaDiaria: v })}
+            metaSemanal={client.metaSemanal}
+            onChangeMetaSemanal={v => updateClientField({ metaSemanal: v })}
+            funcionarios={client.funcionarios}
+            onChangeFuncionarios={list => updateClientField({ funcionarios: list })}
+            monthDate={monthDate} setMonthDate={setMonthDate}
+            extraTotal={client.units.reduce((sum, u) => sum + u.funcionarios.reduce((s2, f) => s2 + sumSalesForMonth(f.sales, monthDate.getFullYear(), monthDate.getMonth()), 0), 0)}
+            extraVendedores={client.units.flatMap(u => u.funcionarios.map(f => ({ ...f, ownerLabel: client.name + " · " + u.name })))}
+            label={client.name}
+          />
+        </div>
+      )}
+
+      {tab === "unidades" && (
+        <div>
+          <h3 className="disp" style={{ fontSize: 18, color: "var(--navy)", margin: "0 0 10px" }}>Unidades / filiais</h3>
+          <UnitsManager units={client.units} onChange={changeUnits} monthDate={monthDate} setMonthDate={setMonthDate} responsaveis={responsaveis} />
+        </div>
+      )}
+
+      {tab === "pontuacao" && (
+        <PontuacaoBoard
+          vendedores={allVendedores}
+          onUpdateVendedor={(v, patch) => persist({ ...data, clients: patchFuncionario(data.clients, client.id, v.unitId, v.id, patch) })}
+          canEdit={isDirector || currentUser.type === "client"}
+          title="Pontuação da equipe de vendas"
+          subtitle="Vale para os vendedores desta empresa e de suas unidades. Só superiores (você ou o cliente) lançam pontos; o funcionário do mês sai automático de quem mais pontua."
+        />
+      )}
+
+      {tab === "contrato" && (
+        <ContractTab client={client} onChange={updateClientField} />
+      )}
+    </div>
+  );
+}
+
+function VendedorPortal({ funcionario, ownerLabel, companyVendedores, monthDate, setMonthDate, onChangeSales }) {
+  const rows = (companyVendedores || []).map(v => ({ id: v.id, name: v.name, value: sumPointsForMonth(v.pontos, monthDate.getFullYear(), monthDate.getMonth()) })).sort((a, b) => b.value - a.value);
+  return (
+    <div>
+      <h2 className="disp" style={{ fontSize: 24, margin: 0, color: "var(--navy)" }}>Minhas Vendas</h2>
+      <p style={{ fontSize: 13, color: "#6d6754", margin: "4px 0 16px" }}>{ownerLabel}</p>
+      <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 16 }}>
+        <button onClick={() => setMonthDate(new Date(monthDate.getFullYear(), monthDate.getMonth() - 1, 1))} className="input" style={{ padding: "4px 10px", cursor: "pointer" }}>‹</button>
+        <div className="mono" style={{ fontSize: 13, textTransform: "capitalize", minWidth: 140, textAlign: "center" }}>{monthLabel(monthDate)}</div>
+        <button onClick={() => setMonthDate(new Date(monthDate.getFullYear(), monthDate.getMonth() + 1, 1))} className="input" style={{ padding: "4px 10px", cursor: "pointer" }}>›</button>
+      </div>
+      <SalesCalendar funcionario={funcionario} monthDate={monthDate} onChangeSales={onChangeSales} />
+
+      <div className="mono" style={{ fontSize: 11, color: "#9b9585", margin: "26px 0 8px" }}>MINHA PONTUAÇÃO — SÓ SUPERIORES LANÇAM, VOCÊ SÓ ACOMPANHA</div>
+      <PointsCalendar pontos={funcionario.pontos} monthDate={monthDate} />
+      {rows.length > 0 && (
+        <>
+          <div className="mono" style={{ fontSize: 11, color: "#9b9585", margin: "20px 0 8px" }}>RANKING DE PONTUAÇÃO DA EQUIPE</div>
+          <RankingBoard rows={rows} formatValue={v => (v > 0 ? "+" : "") + v + " pts"} />
+        </>
+      )}
+    </div>
+  );
+}
+
+function PointsCalendar({ pontos, monthDate }) {
+  const cells = buildMonthGrid(monthDate);
+  const [selected, setSelected] = useState(null);
+  const today = new Date();
+
+  return (
+    <div>
+      <div style={{ display: "grid", gridTemplateColumns: "repeat(7,1fr)", gap: 4, marginBottom: 6 }}>
+        {WEEKDAY_LABELS.map(d => <div key={d} className="mono" style={{ fontSize: 10, textAlign: "center", color: "#9b9585", textTransform: "uppercase" }}>{d}</div>)}
+      </div>
+      <div style={{ display: "grid", gridTemplateColumns: "repeat(7,1fr)", gap: 4 }}>
+        {cells.map((day, i) => {
+          if (!day) return <div key={i} style={{ opacity: 0.15 }} />;
+          const key = toISODate(day);
+          const dayPontos = (pontos || []).filter(p => p.date === key);
+          const sum = dayPontos.reduce((s, p) => s + p.value, 0);
+          const isToday = sameDay(day, today);
+          let bg = "#fff";
+          if (dayPontos.length > 0) bg = sum > 0 ? "var(--green-soft)" : sum < 0 ? "var(--red-soft)" : "#F1EFE9";
+          return (
+            <div key={i} className={"daycell" + (isToday ? " today" : "")}
+              style={{ padding: 4, cursor: dayPontos.length ? "pointer" : "default", background: bg }}
+              onClick={() => dayPontos.length && setSelected(key)}>
+              <div className="mono" style={{ fontSize: 10, color: "#7a7460" }}>{day.getDate()}</div>
+              {dayPontos.length > 0 && (
+                <div className="mono" style={{ fontSize: 9.5, marginTop: 2, fontWeight: 700, color: sum > 0 ? "var(--green)" : sum < 0 ? "var(--red)" : "#7a7460" }}>
+                  {sum > 0 ? "+" : ""}{sum}
+                </div>
+              )}
+            </div>
+          );
+        })}
+      </div>
+
+      {selected && (
+        <div style={{ position: "fixed", inset: 0, background: "rgba(20,18,12,0.45)", display: "flex", alignItems: "center", justifyContent: "center", zIndex: 60 }} onClick={() => setSelected(null)}>
+          <div className="card" style={{ padding: 18, width: 300, maxHeight: "70vh", overflowY: "auto" }} onClick={e => e.stopPropagation()}>
+            <div className="mono" style={{ fontSize: 11, color: "#9b9585", marginBottom: 10 }}>{selected}</div>
+            {(pontos || []).filter(p => p.date === selected).map(p => (
+              <div key={p.id} style={{ padding: "8px 0", borderTop: "1px solid var(--line)" }}>
+                <div style={{ fontWeight: 700, fontSize: 14, color: p.value > 0 ? "var(--green)" : "var(--red)" }}>{p.value > 0 ? "+" : ""}{p.value} pontos</div>
+                <div style={{ fontSize: 12.5, color: "#524d40", marginTop: 2 }}>{p.reason}</div>
+              </div>
+            ))}
+            <button type="button" onClick={() => setSelected(null)} style={{ marginTop: 10, padding: "6px 12px", fontSize: 12, background: "none", border: "1px solid var(--line)", borderRadius: 3, cursor: "pointer" }}>Fechar</button>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+
+function PontuacaoBoard({ vendedores, onUpdateVendedor, canEdit, title, subtitle }) {
+  const [monthDate, setMonthDate] = useState(new Date());
+  const [vendId, setVendId] = useState(vendedores[0]?.id || "");
+  const [date, setDate] = useState(toISODate(new Date()));
+  const [value, setValue] = useState("");
+  const [reason, setReason] = useState("");
+  const [openId, setOpenId] = useState(null);
+
+  const year = monthDate.getFullYear();
+  const monthIdx = monthDate.getMonth();
+
+  function addEntry() {
+    if (!vendId || value === "" || !reason.trim()) return;
+    const v = vendedores.find(x => x.id === vendId);
+    if (!v) return;
+    const entry = { id: uid("pt"), date, value: Number(value), reason: reason.trim() };
+    onUpdateVendedor(v, { pontos: [...(v.pontos || []), entry] });
+    setValue(""); setReason("");
+  }
+  function removeEntry(v, entryId) {
+    onUpdateVendedor(v, { pontos: (v.pontos || []).filter(p => p.id !== entryId) });
+  }
+
+  const rows = vendedores.map(v => ({ id: v.id, name: v.name, sub: v.ownerLabel, total: sumPointsForMonth(v.pontos, year, monthIdx) })).sort((a, b) => b.total - a.total);
+  const chartData = rows.slice(0, 10).map(r => ({ name: r.name, pontos: r.total }));
+  const funcionarioDoMes = rows[0];
+
+  return (
+    <div>
+      <h2 className="disp" style={{ fontSize: 24, margin: 0, color: "var(--navy)" }}>{title}</h2>
+      <p style={{ fontSize: 13, color: "#6d6754", margin: "4px 0 16px", maxWidth: 520 }}>{subtitle}</p>
+
+      <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 16 }}>
+        <button onClick={() => setMonthDate(new Date(year, monthIdx - 1, 1))} className="input" style={{ padding: "4px 10px", cursor: "pointer" }}>‹</button>
+        <div className="mono" style={{ fontSize: 13, textTransform: "capitalize", minWidth: 140, textAlign: "center" }}>{monthLabel(monthDate)}</div>
+        <button onClick={() => setMonthDate(new Date(year, monthIdx + 1, 1))} className="input" style={{ padding: "4px 10px", cursor: "pointer" }}>›</button>
+      </div>
+
+      {funcionarioDoMes && funcionarioDoMes.total > 0 && (
+        <div className="card" style={{ padding: 14, marginBottom: 18, background: "var(--gold-soft)", display: "flex", gap: 12, alignItems: "center" }}>
+          <span style={{ fontSize: 26 }}>🏆</span>
+          <div>
+            <div className="mono" style={{ fontSize: 10, color: "#6b4f14" }}>FUNCIONÁRIO DO MÊS (automático, por pontuação)</div>
+            <div style={{ fontWeight: 700, fontSize: 15 }}>{funcionarioDoMes.name}{funcionarioDoMes.sub ? " · " + funcionarioDoMes.sub : ""}</div>
+          </div>
+        </div>
+      )}
+
+      {canEdit && (
+        <div className="card" style={{ padding: 14, marginBottom: 20 }}>
+          <div className="mono" style={{ fontSize: 11, color: "#9b9585", marginBottom: 8 }}>LANÇAR PONTO (só superiores)</div>
+          <div style={{ display: "flex", gap: 8, marginBottom: 8, flexWrap: "wrap" }}>
+            <select className="input" value={vendId} onChange={e => setVendId(e.target.value)}>
+              {vendedores.map(v => <option key={v.id} value={v.id}>{v.name}{v.ownerLabel ? " · " + v.ownerLabel : ""}</option>)}
+            </select>
+            <input className="input" type="date" value={date} onChange={e => setDate(e.target.value)} />
+            <input className="input" type="number" style={{ width: 110 }} placeholder="+/- pontos" value={value} onChange={e => setValue(e.target.value)} />
+          </div>
+          <input className="input" style={{ width: "100%", marginBottom: 8 }} placeholder="Motivo (pontualidade, atendimento, atraso…)" value={reason} onChange={e => setReason(e.target.value)} />
+          <button type="button" className="btn-gold" style={{ padding: "7px 14px", fontSize: 13, border: "none", cursor: "pointer" }} onClick={addEntry}>+ Registrar ponto</button>
+        </div>
+      )}
+
+      <div className="mono" style={{ fontSize: 11, color: "#9b9585", marginBottom: 10 }}>PÓDIO E RANKING DO MÊS</div>
+      <RankingBoard rows={rows.map(r => ({ id: r.id, name: r.name, sub: r.sub, value: r.total }))} formatValue={v => (v > 0 ? "+" : "") + v + " pts"} />
+
+      {chartData.length > 0 && (
+        <div style={{ height: 200, margin: "14px 0 20px" }}>
+          <ResponsiveContainer width="100%" height="100%">
+            <BarChart data={chartData}>
+              <CartesianGrid strokeDasharray="3 3" stroke="#E4DFD2" />
+              <XAxis dataKey="name" tick={{ fontSize: 10 }} />
+              <YAxis tick={{ fontSize: 10 }} />
+              <Tooltip />
+              <Bar dataKey="pontos" radius={[3, 3, 0, 0]}>
+                {chartData.map((d, i) => <Cell key={i} fill={d.pontos >= 0 ? "#2F6D46" : "#A63A32"} />)}
+              </Bar>
+            </BarChart>
+          </ResponsiveContainer>
+        </div>
+      )}
+
+      <div className="mono" style={{ fontSize: 11, color: "#9b9585", margin: "10px 0" }}>CALENDÁRIO POR PESSOA</div>
+      {vendedores.map(v => {
+        const open = openId === v.id;
+        const total = sumPointsForMonth(v.pontos, year, monthIdx);
+        return (
+          <div key={v.id} className="card" style={{ padding: 14, marginBottom: 10 }}>
+            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", flexWrap: "wrap", gap: 8 }}>
+              <div>
+                <div style={{ fontWeight: 600, fontSize: 14 }}>{v.name}{v.ownerLabel ? <span className="mono" style={{ fontSize: 10.5, color: "#9b9585" }}> · {v.ownerLabel}</span> : null}</div>
+                <div className="mono" style={{ fontSize: 11, color: total >= 0 ? "var(--green)" : "var(--red)" }}>{total >= 0 ? "+" : ""}{total} pts no mês</div>
+              </div>
+              <button type="button" className="input" style={{ cursor: "pointer", fontSize: 12 }} onClick={() => setOpenId(open ? null : v.id)}>{open ? "recolher" : "ver calendário"}</button>
+            </div>
+            {open && (
+              <div style={{ marginTop: 12 }}>
+                <PointsCalendar pontos={v.pontos} monthDate={monthDate} />
+                <div className="mono" style={{ fontSize: 10.5, color: "#9b9585", margin: "12px 0 6px" }}>HISTÓRICO DO MÊS</div>
+                {(v.pontos || []).filter(p => p.date && p.date.startsWith(monthKey(year, monthIdx))).sort((a, b) => b.date.localeCompare(a.date)).map(p => (
+                  <div key={p.id} style={{ display: "flex", justifyContent: "space-between", padding: "6px 0", borderTop: "1px solid var(--line)", gap: 8 }}>
+                    <div>
+                      <span className="mono" style={{ fontSize: 11, color: "#7a7460" }}>{p.date}</span>
+                      {" — "}
+                      <span style={{ fontSize: 12.5, fontWeight: 600, color: p.value > 0 ? "var(--green)" : "var(--red)" }}>{p.value > 0 ? "+" : ""}{p.value}</span>
+                      <div style={{ fontSize: 12, color: "#524d40" }}>{p.reason}</div>
+                    </div>
+                    {canEdit && <button type="button" onClick={() => removeEntry(v, p.id)} style={{ background: "none", border: "none", color: "var(--red)", cursor: "pointer", fontSize: 11 }}>remover</button>}
+                  </div>
+                ))}
+                {(v.pontos || []).filter(p => p.date && p.date.startsWith(monthKey(year, monthIdx))).length === 0 && (
+                  <div style={{ fontSize: 12.5, color: "#9b9585" }}>Nenhum ponto lançado neste mês.</div>
+                )}
+              </div>
+            )}
+          </div>
+        );
+      })}
+    </div>
+  );
+}
+
+function AlertsBanner({ alerts }) {
+  if (alerts.length === 0) return null;
+  return (
+    <div className="card" style={{ padding: 14, marginBottom: 18, borderColor: "var(--red)", background: "var(--red-soft)" }}>
+      <div className="mono" style={{ fontSize: 11, color: "#7a2c26", marginBottom: 8 }}>⚠ ALERTAS ({alerts.length})</div>
+      {alerts.map(a => (
+        <div key={a.id} style={{ fontSize: 13, padding: "4px 0" }}>
+          <strong>{a.name}</strong>{a.sub ? " (" + a.sub + ")" : ""} — {a.message}
+        </div>
+      ))}
+    </div>
+  );
+}
+
+function AlertsView({ data }) {
+  const allVendedores = data.clients.flatMap(c => collectVendedores(c));
+  const alerts = computeAlerts(allVendedores);
+  return (
+    <div>
+      <h2 className="disp" style={{ fontSize: 24, margin: 0, color: "var(--navy)" }}>Alertas</h2>
+      <p style={{ fontSize: 13, color: "#6d6754", margin: "4px 0 16px", maxWidth: 500 }}>
+        Sinaliza quem está 3 dias seguidos sem bater a meta diária ou com pontuação muito baixa na última semana.
+      </p>
+      {alerts.length === 0 && <div className="card" style={{ padding: 16, fontSize: 13.5, color: "var(--green)" }}>🟢 Nenhum alerta no momento.</div>}
+      {alerts.map(a => (
+        <div key={a.id} className="card" style={{ padding: 14, marginBottom: 8, borderColor: "var(--red)", display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+          <div>
+            <div style={{ fontWeight: 600, fontSize: 14 }}>{a.name}</div>
+            {a.sub && <div className="mono" style={{ fontSize: 11, color: "#9b9585" }}>{a.sub}</div>}
+          </div>
+          <div style={{ fontSize: 13, color: "var(--red)", fontWeight: 600 }}>🔴 {a.message}</div>
+        </div>
+      ))}
+    </div>
+  );
+}
+
+function downloadAsWord(filename, htmlBody) {
+  const html = "<html xmlns:o='urn:schemas-microsoft-com:office:office' xmlns:w='urn:schemas-microsoft-com:office:word' xmlns='http://www.w3.org/TR/REC-html40'><head><meta charset='utf-8'><title>Relatório</title></head><body>" + htmlBody + "</body></html>";
+  const blob = new Blob(["\ufeff", html], { type: "application/msword" });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = filename.endsWith(".doc") ? filename : filename + ".doc";
+  document.body.appendChild(a);
+  a.click();
+  document.body.removeChild(a);
+  setTimeout(() => URL.revokeObjectURL(url), 2000);
+}
+
+function renderSectionsToHtml(title, subtitle, sections) {
+  let html = "<h1 style=\"font-family:sans-serif;color:#1B2A4A;\">" + title + "</h1>";
+  if (subtitle) html += "<p style=\"color:#6d6754;font-family:sans-serif;\">" + subtitle + "</p>";
+  sections.forEach(s => {
+    html += "<h3 style=\"font-family:sans-serif;border-bottom:1px solid #ccc;padding-bottom:4px;\">" + s.heading + "</h3><table style=\"width:100%;border-collapse:collapse;margin-bottom:16px;font-family:sans-serif;\">";
+    s.rows.forEach(r => {
+      html += "<tr><td style=\"padding:4px 0;color:#524d40;\">" + r[0] + "</td><td style=\"padding:4px 0;font-weight:bold;text-align:right;\">" + r[1] + "</td></tr>";
+    });
+    html += "</table>";
+  });
+  html += "<p style=\"font-size:11px;color:#999;font-family:sans-serif;\">Emitido em " + new Date().toLocaleString("pt-BR") + "</p>";
+  return html;
+}
+
+function ReportModal({ title, subtitle, sections, filename, onClose }) {
+  function handleWord() {
+    downloadAsWord(filename, renderSectionsToHtml(title, subtitle, sections));
+  }
+  return (
+    <div style={{ position: "fixed", inset: 0, background: "rgba(20,18,12,0.55)", zIndex: 100, display: "flex", alignItems: "flex-start", justifyContent: "center", padding: "30px 16px", overflowY: "auto" }} onClick={onClose}>
+      <div className="print-area card" style={{ width: 640, maxWidth: "100%", padding: 28, background: "#fff" }} onClick={e => e.stopPropagation()}>
+        <div className="no-print" style={{ display: "flex", justifyContent: "flex-end" }}>
+          <button type="button" onClick={onClose} style={{ background: "none", border: "none", fontSize: 18, cursor: "pointer", color: "#9b9585" }}>✕</button>
+        </div>
+        <h2 className="disp" style={{ fontSize: 22, color: "var(--navy)", margin: "0 0 2px" }}>{title}</h2>
+        {subtitle && <div style={{ fontSize: 12.5, color: "#6d6754", marginBottom: 16 }}>{subtitle}</div>}
+        {sections.map((s, i) => (
+          <div key={i} style={{ marginBottom: 16 }}>
+            <div className="mono" style={{ fontSize: 11, color: "#9b9585", marginBottom: 6, borderBottom: "1px solid var(--line)", paddingBottom: 4 }}>{s.heading.toUpperCase()}</div>
+            {s.rows.map((r, j) => (
+              <div key={j} style={{ display: "flex", justifyContent: "space-between", padding: "4px 0", fontSize: 13 }}>
+                <span style={{ color: "#524d40" }}>{r[0]}</span>
+                <span style={{ fontWeight: 600 }}>{r[1]}</span>
+              </div>
+            ))}
+          </div>
+        ))}
+        <div className="mono" style={{ fontSize: 10, color: "#9b9585", marginTop: 8 }}>Emitido em {new Date().toLocaleString("pt-BR")}</div>
+        <div className="no-print" style={{ display: "flex", gap: 8, marginTop: 20 }}>
+          <button type="button" className="btn-primary" style={{ padding: "8px 16px", fontSize: 13, border: "none", cursor: "pointer" }} onClick={() => window.print()}>Imprimir / Salvar PDF</button>
+          <button type="button" className="btn-gold" style={{ padding: "8px 16px", fontSize: 13, border: "none", cursor: "pointer" }} onClick={handleWord}>Baixar em Word</button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function agendaDaysToWordHtml(title, subtitle, days) {
+  let html = "<h1 style=\"font-family:sans-serif;color:#1B2A4A;\">" + title + "</h1>";
+  if (subtitle) html += "<p style=\"font-family:sans-serif;color:#6d6754;text-transform:capitalize;\">" + subtitle + "</p>";
+  if (days.length === 0) html += "<p style=\"font-family:sans-serif;\">Nenhum compromisso neste mês.</p>";
+  days.forEach(d => {
+    html += "<h3 style=\"font-family:sans-serif;text-transform:capitalize;border-bottom:2px solid #B8892B;padding-bottom:4px;margin-top:22px;\">" + d.dateLabel + "</h3>";
+    html += "<table style=\"width:100%;border-collapse:collapse;font-family:sans-serif;margin-bottom:10px;\">";
+    d.events.forEach(ev => {
+      html += "<tr><td style=\"padding:6px 8px;border-bottom:1px solid #eee;white-space:nowrap;font-weight:bold;color:#1B2A4A;vertical-align:top;\">" + ev.time + "</td>"
+        + "<td style=\"padding:6px 8px;border-bottom:1px solid #eee;vertical-align:top;\">"
+        + "<strong>" + ev.title + "</strong>"
+        + (ev.desc ? "<br><span style='color:#524d40;'>" + ev.desc + "</span>" : "")
+        + (ev.tagNames.length ? "<br><span style='color:#6b4f14;font-size:12px;'>Envolve: " + ev.tagNames.join(", ") + "</span>" : "")
+        + "<br><span style='color:#9b9585;font-size:11px;'>" + ev.scopeLabel + "</span>"
+        + "</td></tr>";
+    });
+    html += "</table>";
+  });
+  html += "<p style=\"font-size:11px;color:#999;font-family:sans-serif;\">Emitido em " + new Date().toLocaleString("pt-BR") + "</p>";
+  return html;
+}
+
+function AgendaPrintModal({ title, subtitle, days, filename, onClose }) {
+  return (
+    <div style={{ position: "fixed", inset: 0, background: "rgba(20,18,12,0.55)", zIndex: 100, display: "flex", alignItems: "flex-start", justifyContent: "center", padding: "30px 16px", overflowY: "auto" }} onClick={onClose}>
+      <div className="print-area card" style={{ width: 680, maxWidth: "100%", padding: 28, background: "#fff" }} onClick={e => e.stopPropagation()}>
+        <div className="no-print" style={{ display: "flex", justifyContent: "flex-end" }}>
+          <button type="button" onClick={onClose} style={{ background: "none", border: "none", fontSize: 18, cursor: "pointer", color: "#9b9585" }}>✕</button>
+        </div>
+        <h2 className="disp" style={{ fontSize: 22, color: "var(--navy)", margin: "0 0 2px" }}>{title}</h2>
+        <div className="mono" style={{ fontSize: 12.5, color: "#6d6754", marginBottom: 16, textTransform: "capitalize" }}>{subtitle}</div>
+
+        {days.length === 0 && <div style={{ fontSize: 13, color: "#9b9585" }}>Nenhum compromisso neste mês.</div>}
+
+        {days.map(d => (
+          <div key={d.dateKey} style={{ marginBottom: 18 }}>
+            <div className="mono" style={{ fontSize: 12, color: "#6b4f14", fontWeight: 700, textTransform: "capitalize", borderBottom: "2px solid var(--gold)", paddingBottom: 4, marginBottom: 8 }}>
+              {d.dateLabel}
+            </div>
+            {d.events.map((ev, i) => (
+              <div key={i} style={{ display: "flex", gap: 12, padding: "8px 0", borderBottom: "1px solid var(--line)" }}>
+                <div className="mono" style={{ fontSize: 12, color: "var(--navy)", fontWeight: 700, minWidth: 110, whiteSpace: "nowrap" }}>{ev.time}</div>
+                <div style={{ flex: 1 }}>
+                  <div style={{ fontWeight: 600, fontSize: 13.5 }}>{ev.title}</div>
+                  {ev.desc && <div style={{ fontSize: 12.5, color: "#524d40", marginTop: 2 }}>{ev.desc}</div>}
+                  {ev.tagNames.length > 0 && <div style={{ fontSize: 11.5, color: "#6b4f14", marginTop: 2 }}>Envolve: {ev.tagNames.join(", ")}</div>}
+                  <div className="mono" style={{ fontSize: 10, color: "#9b9585", marginTop: 2 }}>{ev.scopeLabel}</div>
+                </div>
+              </div>
+            ))}
+          </div>
+        ))}
+
+        <div className="mono" style={{ fontSize: 10, color: "#9b9585", marginTop: 8 }}>Emitido em {new Date().toLocaleString("pt-BR")}</div>
+        <div className="no-print" style={{ display: "flex", gap: 8, marginTop: 20 }}>
+          <button type="button" className="btn-primary" style={{ padding: "8px 16px", fontSize: 13, border: "none", cursor: "pointer" }} onClick={() => window.print()}>Imprimir / Salvar PDF</button>
+          <button type="button" className="btn-gold" style={{ padding: "8px 16px", fontSize: 13, border: "none", cursor: "pointer" }} onClick={() => downloadAsWord(filename, agendaDaysToWordHtml(title, subtitle, days))}>Baixar em Word</button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function ReportButton({ label, buildReport }) {
+  const [open, setOpen] = useState(false);
+  const report = open ? buildReport() : null;
+  return (
+    <>
+      <button type="button" className="input" style={{ cursor: "pointer", fontSize: 12.5 }} onClick={() => setOpen(true)}>{label}</button>
+      {open && report && (
+        <ReportModal title={report.title} subtitle={report.subtitle} sections={report.sections} filename={report.filename} onClose={() => setOpen(false)} />
+      )}
+    </>
+  );
+}
+
+function daysBetween(a, b) {
+  const d1 = new Date(a); d1.setHours(0, 0, 0, 0);
+  const d2 = new Date(b); d2.setHours(0, 0, 0, 0);
+  return Math.round((d2 - d1) / 86400000);
+}
+
+function ContractTab({ client, onChange }) {
+  const today = toISODate(new Date());
+  const total = client.contractStart && client.contractEnd ? daysBetween(client.contractStart, client.contractEnd) : null;
+  const elapsed = client.contractStart ? Math.max(0, Math.min(total ?? Infinity, daysBetween(client.contractStart, today))) : null;
+  const remaining = client.contractEnd ? daysBetween(today, client.contractEnd) : null;
+  const pct = total && total > 0 ? Math.min(100, Math.max(0, (elapsed / total) * 100)) : null;
+
+  return (
+    <div>
+      <h3 className="disp" style={{ fontSize: 18, color: "var(--navy)", margin: "0 0 10px" }}>Contrato e pagamento</h3>
+      <div className="card" style={{ padding: 16, marginBottom: 16 }}>
+        <div style={{ display: "flex", gap: 20, flexWrap: "wrap", marginBottom: 14 }}>
+          <div>
+            <label style={{ fontSize: 12, color: "#665f4f" }}>Início do contrato</label>
+            <input className="input" type="date" style={{ display: "block", marginTop: 4 }} value={client.contractStart || ""} onChange={e => onChange({ contractStart: e.target.value || null })} />
+          </div>
+          <div>
+            <label style={{ fontSize: 12, color: "#665f4f" }}>Fim do contrato</label>
+            <input className="input" type="date" style={{ display: "block", marginTop: 4 }} value={client.contractEnd || ""} onChange={e => onChange({ contractEnd: e.target.value || null })} />
+          </div>
+          <div>
+            <label style={{ fontSize: 12, color: "#665f4f" }}>Data de pagamento</label>
+            <input className="input" type="date" style={{ display: "block", marginTop: 4 }} value={client.paymentDate || ""} onChange={e => onChange({ paymentDate: e.target.value || null })} />
+          </div>
+        </div>
+        {total != null && (
+          <div>
+            <div style={{ height: 8, background: "#EDEBE3", borderRadius: 4, overflow: "hidden", marginBottom: 8 }}>
+              <div style={{ height: "100%", width: pct + "%", background: remaining != null && remaining <= 30 ? "var(--red)" : "var(--gold)" }} />
+            </div>
+            <div style={{ display: "flex", gap: 20, flexWrap: "wrap", fontSize: 13 }}>
+              <div><span className="mono" style={{ color: "#9b9585", fontSize: 10.5 }}>DURAÇÃO TOTAL</span><div style={{ fontWeight: 600 }}>{total} dias</div></div>
+              <div><span className="mono" style={{ color: "#9b9585", fontSize: 10.5 }}>DIAS CORRIDOS</span><div style={{ fontWeight: 600 }}>{elapsed} dias</div></div>
+              <div><span className="mono" style={{ color: "#9b9585", fontSize: 10.5 }}>DIAS RESTANTES</span><div style={{ fontWeight: 600, color: remaining <= 30 ? "var(--red)" : "var(--navy)" }}>{remaining} dias{remaining <= 30 ? " ⚠" : ""}</div></div>
+            </div>
+          </div>
+        )}
+        {total == null && <div style={{ fontSize: 12.5, color: "#9b9585" }}>Preencha início e fim do contrato para calcular os dias corridos e restantes.</div>}
+      </div>
+    </div>
+  );
+}
+
+function ContractsOverview({ data }) {
+  const today = toISODate(new Date());
+  const rows = data.clients.filter(c => c.contractEnd).map(c => ({
+    id: c.id, name: c.name,
+    remaining: daysBetween(today, c.contractEnd),
+    paymentDate: c.paymentDate,
+  })).sort((a, b) => a.remaining - b.remaining);
+
+  return (
+    <div>
+      <h2 className="disp" style={{ fontSize: 24, margin: 0, color: "var(--navy)" }}>Contratos</h2>
+      <p style={{ fontSize: 13, color: "#6d6754", margin: "4px 0 16px" }}>Todos os clientes com contrato cadastrado, do mais próximo de vencer para o mais distante.</p>
+      {rows.length === 0 && <div className="card" style={{ padding: 16, fontSize: 13, color: "#9b9585" }}>Nenhum contrato com datas cadastradas ainda. Preencha na aba "Contrato" de cada cliente.</div>}
+      {rows.map(r => (
+        <div key={r.id} className="card" style={{ padding: "12px 14px", marginBottom: 8, display: "flex", justifyContent: "space-between", alignItems: "center", flexWrap: "wrap", gap: 6 }}>
+          <div style={{ fontWeight: 500, fontSize: 13.5 }}>{r.name}</div>
+          <div style={{ display: "flex", gap: 16, alignItems: "center" }}>
+            {r.paymentDate && <span className="mono" style={{ fontSize: 11, color: "#9b9585" }}>pagamento: {r.paymentDate}</span>}
+            <span style={{ fontSize: 13, fontWeight: 600, color: r.remaining <= 30 ? "var(--red)" : "var(--navy)" }}>{r.remaining} dias restantes{r.remaining <= 30 ? " ⚠" : ""}</span>
+          </div>
+        </div>
+      ))}
+    </div>
+  );
+}
+
+function ProspectsManager({ data, persist }) {
+  const [name, setName] = useState("");
+  const [contact, setContact] = useState("");
+  const [visitDate, setVisitDate] = useState("");
+  const [notes, setNotes] = useState("");
+
+  async function addProspect() {
+    if (!name.trim()) return;
+    const entry = { id: uid("prospect"), name: name.trim(), contact: contact.trim(), visitDate: visitDate || null, notes: notes.trim(), createdAt: toISODate(new Date()) };
+    await persist({ ...data, prospects: [...data.prospects, entry] });
+    setName(""); setContact(""); setVisitDate(""); setNotes("");
+  }
+  async function removeProspect(id) {
+    await persist({ ...data, prospects: data.prospects.filter(p => p.id !== id) });
+  }
+  async function updateProspect(id, patch) {
+    await persist({ ...data, prospects: data.prospects.map(p => p.id === id ? { ...p, ...patch } : p) });
+  }
+
+  const sorted = [...data.prospects].sort((a, b) => (a.visitDate || "9999").localeCompare(b.visitDate || "9999"));
+
+  return (
+    <div>
+      <h2 className="disp" style={{ fontSize: 24, margin: 0, color: "var(--navy)" }}>Possíveis Clientes</h2>
+      <p style={{ fontSize: 13, color: "#6d6754", margin: "4px 0 16px", maxWidth: 500 }}>Lista ilimitada de leads e visitas futuras — separada dos 20 clientes ativos.</p>
+
+      <div className="card" style={{ padding: 14, marginBottom: 18 }}>
+        <div className="mono" style={{ fontSize: 11, color: "#9b9585", marginBottom: 8 }}>NOVO POSSÍVEL CLIENTE</div>
+        <input className="input" style={{ width: "100%", marginBottom: 8 }} placeholder="Nome / empresa" value={name} onChange={e => setName(e.target.value)} />
+        <div style={{ display: "flex", gap: 8, marginBottom: 8, flexWrap: "wrap" }}>
+          <input className="input" style={{ flex: 1, minWidth: 160 }} placeholder="Contato (telefone/e-mail)" value={contact} onChange={e => setContact(e.target.value)} />
+          <input className="input" type="date" value={visitDate} onChange={e => setVisitDate(e.target.value)} />
+        </div>
+        <input className="input" style={{ width: "100%", marginBottom: 8 }} placeholder="Observações" value={notes} onChange={e => setNotes(e.target.value)} />
+        <button type="button" className="btn-gold" style={{ padding: "7px 14px", fontSize: 13, border: "none", cursor: "pointer" }} onClick={addProspect}>+ Adicionar</button>
+      </div>
+
+      {sorted.length === 0 && <div style={{ fontSize: 13, color: "#9b9585" }}>Nenhum possível cliente cadastrado ainda.</div>}
+      {sorted.map(p => (
+        <div key={p.id} className="card" style={{ padding: 14, marginBottom: 8 }}>
+          <div style={{ display: "flex", justifyContent: "space-between", gap: 8 }}>
+            <div style={{ flex: 1 }}>
+              <input className="input" style={{ width: "100%", marginBottom: 6, fontWeight: 600 }} value={p.name} onChange={e => updateProspect(p.id, { name: e.target.value })} />
+              <div style={{ display: "flex", gap: 8, marginBottom: 6, flexWrap: "wrap" }}>
+                <input className="input" style={{ flex: 1, minWidth: 140 }} value={p.contact} onChange={e => updateProspect(p.id, { contact: e.target.value })} placeholder="Contato" />
+                <input className="input" type="date" value={p.visitDate || ""} onChange={e => updateProspect(p.id, { visitDate: e.target.value || null })} />
+              </div>
+              <textarea className="input" style={{ width: "100%", minHeight: 40 }} value={p.notes} onChange={e => updateProspect(p.id, { notes: e.target.value })} />
+            </div>
+            <button type="button" onClick={() => removeProspect(p.id)} style={{ background: "none", border: "none", color: "var(--red)", cursor: "pointer", fontSize: 12 }}>remover</button>
+          </div>
+        </div>
+      ))}
+    </div>
+  );
+}
+
+function FeedbackSendForm({ data, persist, authorLabel, authorName }) {
+  const [message, setMessage] = useState("");
+  const [type, setType] = useState("sugestao");
+  const [anonymous, setAnonymous] = useState(false);
+  const [clientId, setClientId] = useState("");
+  const [unitId, setUnitId] = useState("");
+  const [sent, setSent] = useState(false);
+
+  const client = data.clients.find(c => c.id === clientId);
+
+  async function send() {
+    if (!message.trim()) return;
+    const entry = {
+      id: uid("fb"), date: toISODate(new Date()), message: message.trim(), type, anonymous,
+      authorName: anonymous ? null : authorName, authorLabel: anonymous ? null : authorLabel,
+      clientId: clientId || null, unitId: unitId || null,
+    };
+    await persist({ ...data, feedbackMessages: [...data.feedbackMessages, entry] });
+    setMessage(""); setSent(true);
+    setTimeout(() => setSent(false), 3000);
+  }
+
+  return (
+    <div style={{ maxWidth: 500 }}>
+      <h2 className="disp" style={{ fontSize: 24, margin: 0, color: "var(--navy)" }}>Enviar Feedback</h2>
+      <p style={{ fontSize: 13, color: "#6d6754", margin: "4px 0 16px" }}>Críticas, sugestões ou elogios direto para o diretor. Pode ser anônimo — só a empresa/unidade é identificada.</p>
+
+      <div className="card" style={{ padding: 16 }}>
+        <div style={{ display: "flex", gap: 8, marginBottom: 10 }}>
+          {[["elogio", "Elogio"], ["sugestao", "Sugestão"], ["critica", "Crítica"]].map(([k, l]) => (
+            <button key={k} type="button" onClick={() => setType(k)} className="input"
+              style={{ cursor: "pointer", background: type === k ? "var(--navy)" : "#fff", color: type === k ? "#fff" : "inherit" }}>{l}</button>
+          ))}
+        </div>
+        <textarea className="input" style={{ width: "100%", minHeight: 100, marginBottom: 10 }} placeholder="Escreva sua mensagem…" value={message} onChange={e => setMessage(e.target.value)} />
+
+        <div style={{ display: "flex", gap: 8, marginBottom: 10, flexWrap: "wrap" }}>
+          <select className="input" style={{ flex: 1, minWidth: 160 }} value={clientId} onChange={e => { setClientId(e.target.value); setUnitId(""); }}>
+            <option value="">Empresa (opcional)</option>
+            {data.clients.map(c => <option key={c.id} value={c.id}>{c.name}</option>)}
+          </select>
+          {client && client.units.length > 0 && (
+            <select className="input" style={{ flex: 1, minWidth: 140 }} value={unitId} onChange={e => setUnitId(e.target.value)}>
+              <option value="">Unidade (opcional)</option>
+              {client.units.map(u => <option key={u.id} value={u.id}>{u.name}</option>)}
+            </select>
+          )}
+        </div>
+
+        <label style={{ display: "flex", alignItems: "center", gap: 8, fontSize: 13, marginBottom: 14, cursor: "pointer" }}>
+          <input type="checkbox" checked={anonymous} onChange={e => setAnonymous(e.target.checked)} />
+          Enviar de forma anônima
+        </label>
+
+        <button type="button" className="btn-primary" style={{ padding: "9px 18px", fontSize: 13.5, border: "none", cursor: "pointer" }} onClick={send}>Enviar</button>
+        {sent && <div style={{ color: "var(--green)", fontSize: 12.5, marginTop: 8 }}>Enviado.</div>}
+      </div>
+    </div>
+  );
+}
+
+function FeedbackInbox({ data }) {
+  const [filter, setFilter] = useState("all");
+  const msgs = [...data.feedbackMessages].sort((a, b) => b.date.localeCompare(a.date))
+    .filter(m => filter === "all" ? true : filter === "anon" ? m.anonymous : !m.anonymous);
+
+  const typeLabel = { elogio: "Elogio", sugestao: "Sugestão", critica: "Crítica" };
+  const typeColor = { elogio: "var(--green)", sugestao: "var(--navy)", critica: "var(--red)" };
+
+  return (
+    <div>
+      <h2 className="disp" style={{ fontSize: 24, margin: 0, color: "var(--navy)" }}>Caixa de Feedback</h2>
+      <p style={{ fontSize: 13, color: "#6d6754", margin: "4px 0 16px" }}>Mensagens de toda a equipe e de clientes — clima organizacional.</p>
+
+      <div style={{ display: "flex", gap: 6, marginBottom: 14 }}>
+        {[["all", "Todas"], ["anon", "Anônimas"], ["named", "Identificadas"]].map(([k, l]) => (
+          <button key={k} type="button" onClick={() => setFilter(k)} className="input" style={{ cursor: "pointer", background: filter === k ? "var(--navy)" : "#fff", color: filter === k ? "#fff" : "inherit" }}>{l}</button>
+        ))}
+      </div>
+
+      {msgs.length === 0 && <div style={{ fontSize: 13, color: "#9b9585" }}>Nenhuma mensagem ainda.</div>}
+      {msgs.map(m => {
+        const client = m.clientId ? data.clients.find(c => c.id === m.clientId) : null;
+        const unit = client && m.unitId ? client.units.find(u => u.id === m.unitId) : null;
+        return (
+          <div key={m.id} className="card" style={{ padding: 14, marginBottom: 10 }}>
+            <div style={{ display: "flex", justifyContent: "space-between", gap: 8, marginBottom: 6, flexWrap: "wrap" }}>
+              <span className="mono" style={{ fontSize: 10.5, color: typeColor[m.type], fontWeight: 700 }}>{typeLabel[m.type]?.toUpperCase()}</span>
+              <span className="mono" style={{ fontSize: 10.5, color: "#9b9585" }}>{m.date}</span>
+            </div>
+            <div style={{ fontSize: 13.5, marginBottom: 8 }}>{m.message}</div>
+            <div style={{ display: "flex", gap: 10, flexWrap: "wrap", fontSize: 11.5, color: "#7a7460" }}>
+              <span>{m.anonymous ? "🕶 Anônimo" : "De: " + (m.authorName || "—") + (m.authorLabel ? " · " + m.authorLabel : "")}</span>
+              {(client || unit) && <span className="mono">{client?.name}{unit ? " · " + unit.name : ""}</span>}
+            </div>
+          </div>
+        );
+      })}
+    </div>
+  );
+}
+
+function receitaMensal(data, year, monthIdx) {
+  const key = monthKey(year, monthIdx);
+  const fromClients = data.clients.reduce((s, c) => {
+    const p = c.payments?.[key];
+    return s + (p && p.status === "pago" && p.amount ? p.amount : 0);
+  }, 0);
+  const fromContas = data.financas.contasReceber.filter(c => c.received && c.dueDate && c.dueDate.startsWith(key)).reduce((s, c) => s + c.amount, 0);
+  const fromLancamentos = data.financas.lancamentos.filter(l => l.type === "entrada" && l.date && l.date.startsWith(key)).reduce((s, l) => s + l.amount, 0);
+  return fromClients + fromContas + fromLancamentos;
+}
+
+function despesaMensal(data, year, monthIdx) {
+  const key = monthKey(year, monthIdx);
+  const fromContas = data.financas.contasPagar.filter(c => c.paid && c.dueDate && c.dueDate.startsWith(key)).reduce((s, c) => s + c.amount, 0);
+  const fromLancamentos = data.financas.lancamentos.filter(l => l.type === "saida" && l.date && l.date.startsWith(key)).reduce((s, l) => s + l.amount, 0);
+  return fromContas + fromLancamentos;
+}
+
+function FinanceiroModule({ data, persist }) {
+  const [tab, setTab] = useState("dashboard");
+  const tabs = [
+    ["dashboard", "Dashboard"],
+    ["fluxo", "Contas a Pagar/Receber"],
+    ["pagamentos", "Status dos Clientes"],
+    ["perfis", "Perfis & Horas"],
+    ["equipe", "Horas da Equipe"],
+    ["faturamento", "Faturamento & Meta"],
+  ];
+  return (
+    <div>
+      <h2 className="disp" style={{ fontSize: 24, margin: 0, color: "var(--navy)" }}>Financeiro</h2>
+      <p style={{ fontSize: 13, color: "#6d6754", margin: "4px 0 16px", maxWidth: 520 }}>
+        Visível só para você. Fluxo de caixa, contas, DRE, status de pagamento dos clientes, perfis, horas e faturamento da sua consultoria.
+      </p>
+      <div style={{ display: "flex", gap: 4, marginBottom: 18, borderBottom: "1px solid var(--line)", flexWrap: "wrap" }}>
+        {tabs.map(([k, l]) => (
+          <button key={k} type="button" onClick={() => setTab(k)}
+            style={{ padding: "8px 14px", fontSize: 12.5, background: "none", border: "none", cursor: "pointer", borderBottom: tab === k ? "2px solid var(--gold)" : "2px solid transparent", fontWeight: tab === k ? 600 : 400, color: tab === k ? "var(--navy)" : "#7a7460" }}>
+            {l}
+          </button>
+        ))}
+      </div>
+      {tab === "dashboard" && <FinanceiroDashboard data={data} persist={persist} />}
+      {tab === "fluxo" && <ContasPagarReceberView data={data} persist={persist} />}
+      {tab === "pagamentos" && <PagamentosClientesView data={data} persist={persist} />}
+      {tab === "perfis" && <PerfisHorasView data={data} persist={persist} />}
+      {tab === "equipe" && <HorasEquipeView data={data} />}
+      {tab === "faturamento" && <FaturamentoMetaView data={data} persist={persist} />}
+    </div>
+  );
+}
+
+function FinanceiroDashboard({ data, persist }) {
+  const [monthDate, setMonthDate] = useState(new Date());
+  const year = monthDate.getFullYear();
+  const monthIdx = monthDate.getMonth();
+
+  const last6 = Array.from({ length: 6 }, (_, i) => {
+    const d = new Date(year, monthIdx - (5 - i), 1);
+    return { label: d.toLocaleDateString("pt-BR", { month: "short" }), receita: receitaMensal(data, d.getFullYear(), d.getMonth()), despesa: despesaMensal(data, d.getFullYear(), d.getMonth()) };
+  });
+  const receita = receitaMensal(data, year, monthIdx);
+  const despesa = despesaMensal(data, year, monthIdx);
+  const resultado = receita - despesa;
+
+  return (
+    <div>
+      <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 16 }}>
+        <button onClick={() => setMonthDate(new Date(year, monthIdx - 1, 1))} className="input" style={{ padding: "4px 10px", cursor: "pointer" }}>‹</button>
+        <div className="mono" style={{ fontSize: 13, textTransform: "capitalize", minWidth: 140, textAlign: "center" }}>{monthLabel(monthDate)}</div>
+        <button onClick={() => setMonthDate(new Date(year, monthIdx + 1, 1))} className="input" style={{ padding: "4px 10px", cursor: "pointer" }}>›</button>
+      </div>
+
+      <div style={{ display: "flex", gap: 14, flexWrap: "wrap", marginBottom: 20 }}>
+        <div className="card" style={{ padding: 14, flex: 1, minWidth: 160 }}>
+          <div className="mono" style={{ fontSize: 10.5, color: "#9b9585" }}>RECEITA (DRE)</div>
+          <div className="mono" style={{ fontSize: 18, fontWeight: 700, color: "var(--green)" }}>{fmtBRL(receita)}</div>
+        </div>
+        <div className="card" style={{ padding: 14, flex: 1, minWidth: 160 }}>
+          <div className="mono" style={{ fontSize: 10.5, color: "#9b9585" }}>DESPESA (DRE)</div>
+          <div className="mono" style={{ fontSize: 18, fontWeight: 700, color: "var(--red)" }}>{fmtBRL(despesa)}</div>
+        </div>
+        <div className="card" style={{ padding: 14, flex: 1, minWidth: 160 }}>
+          <div className="mono" style={{ fontSize: 10.5, color: "#9b9585" }}>RESULTADO LÍQUIDO</div>
+          <div className="mono" style={{ fontSize: 18, fontWeight: 700, color: resultado >= 0 ? "var(--green)" : "var(--red)" }}>{fmtBRL(resultado)}</div>
+        </div>
+      </div>
+
+      <div className="mono" style={{ fontSize: 11, color: "#9b9585", marginBottom: 8 }}>FLUXO DE CAIXA — ÚLTIMOS 6 MESES</div>
+      <div style={{ height: 220, marginBottom: 20 }}>
+        <ResponsiveContainer width="100%" height="100%">
+          <BarChart data={last6}>
+            <CartesianGrid strokeDasharray="3 3" stroke="#E4DFD2" />
+            <XAxis dataKey="label" tick={{ fontSize: 11 }} />
+            <YAxis tick={{ fontSize: 10 }} />
+            <Tooltip formatter={v => fmtBRL(v)} />
+            <Bar dataKey="receita" fill="#2F6D46" radius={[3, 3, 0, 0]} />
+            <Bar dataKey="despesa" fill="#A63A32" radius={[3, 3, 0, 0]} />
+          </BarChart>
+        </ResponsiveContainer>
+      </div>
+
+      <div className="mono" style={{ fontSize: 11, color: "#9b9585", marginBottom: 8 }}>SALDO ACUMULADO</div>
+      <div style={{ height: 160 }}>
+        <ResponsiveContainer width="100%" height="100%">
+          <LineChart data={last6.map((m, i) => ({ label: m.label, saldo: last6.slice(0, i + 1).reduce((s, x) => s + (x.receita - x.despesa), 0) }))}>
+            <CartesianGrid strokeDasharray="3 3" stroke="#E4DFD2" />
+            <XAxis dataKey="label" tick={{ fontSize: 11 }} />
+            <YAxis tick={{ fontSize: 10 }} />
+            <Tooltip formatter={v => fmtBRL(v)} />
+            <Line type="monotone" dataKey="saldo" stroke="#1B2A4A" strokeWidth={2} dot={{ r: 3 }} />
+          </LineChart>
+        </ResponsiveContainer>
+      </div>
+    </div>
+  );
+}
+
+function ContasPagarReceberView({ data, persist }) {
+  const [subTab, setSubTab] = useState("pagar");
+  const [desc, setDesc] = useState("");
+  const [dueDate, setDueDate] = useState(toISODate(new Date()));
+  const [amount, setAmount] = useState("");
+  const [category, setCategory] = useState("");
+  const [clientId, setClientId] = useState("");
+
+  const list = subTab === "pagar" ? data.financas.contasPagar : data.financas.contasReceber;
+  const key = subTab === "pagar" ? "contasPagar" : "contasReceber";
+  const doneField = subTab === "pagar" ? "paid" : "received";
+  const doneDateField = subTab === "pagar" ? "paidDate" : "receivedDate";
+
+  async function addConta() {
+    if (!desc.trim() || amount === "") return;
+    const entry = { id: uid("cta"), description: desc.trim(), dueDate, amount: Number(amount), category: category.trim(), [doneField]: false, [doneDateField]: null };
+    if (subTab === "receber") entry.clientId = clientId || null;
+    await persist({ ...data, financas: { ...data.financas, [key]: [...list, entry] } });
+    setDesc(""); setAmount(""); setCategory(""); setClientId("");
+  }
+  async function toggleDone(id) {
+    const next = list.map(c => c.id === id ? { ...c, [doneField]: !c[doneField], [doneDateField]: !c[doneField] ? toISODate(new Date()) : null } : c);
+    await persist({ ...data, financas: { ...data.financas, [key]: next } });
+  }
+  async function removeConta(id) {
+    await persist({ ...data, financas: { ...data.financas, [key]: list.filter(c => c.id !== id) } });
+  }
+
+  const today = toISODate(new Date());
+  const sorted = [...list].sort((a, b) => a.dueDate.localeCompare(b.dueDate));
+
+  return (
+    <div>
+      <div style={{ display: "flex", gap: 6, marginBottom: 16 }}>
+        <button type="button" onClick={() => setSubTab("pagar")} className="input" style={{ cursor: "pointer", background: subTab === "pagar" ? "var(--navy)" : "#fff", color: subTab === "pagar" ? "#fff" : "inherit" }}>Contas a Pagar</button>
+        <button type="button" onClick={() => setSubTab("receber")} className="input" style={{ cursor: "pointer", background: subTab === "receber" ? "var(--navy)" : "#fff", color: subTab === "receber" ? "#fff" : "inherit" }}>Contas a Receber</button>
+      </div>
+
+      <div className="card" style={{ padding: 14, marginBottom: 16 }}>
+        <div className="mono" style={{ fontSize: 11, color: "#9b9585", marginBottom: 8 }}>NOVA CONTA A {subTab === "pagar" ? "PAGAR" : "RECEBER"}</div>
+        <input className="input" style={{ width: "100%", marginBottom: 8 }} placeholder="Descrição" value={desc} onChange={e => setDesc(e.target.value)} />
+        <div style={{ display: "flex", gap: 8, marginBottom: 8, flexWrap: "wrap" }}>
+          <input className="input" type="date" value={dueDate} onChange={e => setDueDate(e.target.value)} />
+          <input className="input" type="number" style={{ width: 140 }} placeholder="Valor (R$)" value={amount} onChange={e => setAmount(e.target.value)} />
+          <input className="input" style={{ width: 150 }} placeholder="Categoria" value={category} onChange={e => setCategory(e.target.value)} />
+          {subTab === "receber" && (
+            <select className="input" value={clientId} onChange={e => setClientId(e.target.value)}>
+              <option value="">Cliente (opcional)</option>
+              {data.clients.map(c => <option key={c.id} value={c.id}>{c.name}</option>)}
+            </select>
+          )}
+        </div>
+        <button type="button" className="btn-gold" style={{ padding: "7px 14px", fontSize: 13, border: "none", cursor: "pointer" }} onClick={addConta}>+ Adicionar</button>
+      </div>
+
+      {sorted.length === 0 && <div style={{ fontSize: 13, color: "#9b9585" }}>Nenhuma conta cadastrada.</div>}
+      {sorted.map(c => {
+        const overdue = !c[doneField] && c.dueDate < today;
+        return (
+          <div key={c.id} className="card" style={{ padding: 12, marginBottom: 8, display: "flex", justifyContent: "space-between", alignItems: "center", flexWrap: "wrap", gap: 8, borderColor: overdue ? "var(--red)" : undefined }}>
+            <div>
+              <div style={{ fontWeight: 600, fontSize: 13.5 }}>{c.description}</div>
+              <div className="mono" style={{ fontSize: 11, color: overdue ? "var(--red)" : "#9b9585" }}>
+                vence {c.dueDate}{c.category ? " · " + c.category : ""}{overdue ? " · ATRASADA" : ""}
+              </div>
+            </div>
+            <div style={{ display: "flex", gap: 10, alignItems: "center" }}>
+              <span className="mono" style={{ fontSize: 13, fontWeight: 700 }}>{fmtBRL(c.amount)}</span>
+              <label style={{ display: "flex", alignItems: "center", gap: 5, fontSize: 12, cursor: "pointer" }}>
+                <input type="checkbox" checked={!!c[doneField]} onChange={() => toggleDone(c.id)} />
+                {subTab === "pagar" ? "pago" : "recebido"}
+              </label>
+              <button type="button" onClick={() => removeConta(c.id)} style={{ background: "none", border: "none", color: "var(--red)", cursor: "pointer", fontSize: 11 }}>remover</button>
+            </div>
+          </div>
+        );
+      })}
+    </div>
+  );
+}
+
+function PagamentosClientesView({ data, persist }) {
+  const [monthDate, setMonthDate] = useState(new Date());
+  const year = monthDate.getFullYear();
+  const monthIdx = monthDate.getMonth();
+  const key = monthKey(year, monthIdx);
+  const [search, setSearch] = useState("");
+
+  async function updateClient(id, patch) {
+    await persist({ ...data, clients: data.clients.map(c => c.id === id ? { ...c, ...patch } : c) });
+  }
+  async function updatePayment(id, patch) {
+    const client = data.clients.find(c => c.id === id);
+    const current = client.payments?.[key] || { status: "pendente", paidDate: null, amount: null };
+    await updateClient(id, { payments: { ...client.payments, [key]: { ...current, ...patch } } });
+  }
+
+  const filtered = data.clients.filter(c => c.name.toLowerCase().includes(search.toLowerCase()));
+  const paidCount = data.clients.filter(c => c.payments?.[key]?.status === "pago").length;
+
+  return (
+    <div>
+      <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 8, flexWrap: "wrap" }}>
+        <button onClick={() => setMonthDate(new Date(year, monthIdx - 1, 1))} className="input" style={{ padding: "4px 10px", cursor: "pointer" }}>‹</button>
+        <div className="mono" style={{ fontSize: 13, textTransform: "capitalize", minWidth: 140, textAlign: "center" }}>{monthLabel(monthDate)}</div>
+        <button onClick={() => setMonthDate(new Date(year, monthIdx + 1, 1))} className="input" style={{ padding: "4px 10px", cursor: "pointer" }}>›</button>
+        <span className="mono" style={{ fontSize: 12, color: "#9b9585" }}>{paidCount}/{data.clients.length} pagas neste mês</span>
+      </div>
+      <input className="input" style={{ width: "100%", marginBottom: 14 }} placeholder="Buscar cliente…" value={search} onChange={e => setSearch(e.target.value)} />
+
+      {filtered.map(c => {
+        const p = c.payments?.[key] || { status: "pendente", paidDate: null, amount: null };
+        const isPago = p.status === "pago";
+        return (
+          <div key={c.id} className="card" style={{ padding: 14, marginBottom: 8, background: isPago ? "var(--green-soft)" : "var(--red-soft)" }}>
+            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", flexWrap: "wrap", gap: 8 }}>
+              <div style={{ fontWeight: 600, fontSize: 13.5 }}>{c.name}</div>
+              <div style={{ fontSize: 12.5, fontWeight: 700, color: isPago ? "var(--green)" : "var(--red)" }}>{isPago ? "🟢 PAGO" : "🔴 PENDENTE"}</div>
+            </div>
+            <div style={{ display: "flex", gap: 10, marginTop: 8, flexWrap: "wrap", alignItems: "center" }}>
+              <label style={{ display: "flex", alignItems: "center", gap: 5, fontSize: 12, cursor: "pointer" }}>
+                <input type="checkbox" checked={isPago} onChange={() => updatePayment(c.id, { status: isPago ? "pendente" : "pago", paidDate: isPago ? null : toISODate(new Date()) })} />
+                marcar como pago
+              </label>
+              <input className="input" type="number" style={{ width: 130 }} placeholder="Valor pago" value={p.amount ?? ""} onChange={e => updatePayment(c.id, { amount: e.target.value === "" ? null : Number(e.target.value) })} />
+              <div style={{ display: "flex", gap: 6, alignItems: "center" }}>
+                <span className="mono" style={{ fontSize: 10.5, color: "#7a7460" }}>DIA PGTO 1</span>
+                <input className="input" type="number" min="1" max="31" style={{ width: 60 }} value={c.paymentDay1 ?? ""} onChange={e => updateClient(c.id, { paymentDay1: e.target.value === "" ? null : Number(e.target.value) })} />
+                <span className="mono" style={{ fontSize: 10.5, color: "#7a7460" }}>DIA PGTO 2</span>
+                <input className="input" type="number" min="1" max="31" style={{ width: 60 }} value={c.paymentDay2 ?? ""} onChange={e => updateClient(c.id, { paymentDay2: e.target.value === "" ? null : Number(e.target.value) })} />
+              </div>
+            </div>
+          </div>
+        );
+      })}
+    </div>
+  );
+}
+
+function PerfisHorasView({ data, persist }) {
+  const [monthDate, setMonthDate] = useState(new Date());
+  const year = monthDate.getFullYear();
+  const monthIdx = monthDate.getMonth();
+  const [clientId, setClientId] = useState(data.clients[0]?.id || "");
+  const [personName, setPersonName] = useState("");
+  const [profileNotes, setProfileNotes] = useState("");
+
+  const client = data.clients.find(c => c.id === clientId);
+
+  async function addProfile() {
+    if (!client || !personName.trim()) return;
+    const entry = { id: uid("prof"), date: toISODate(new Date()), personName: personName.trim(), notes: profileNotes.trim() };
+    await persist({ ...data, clients: data.clients.map(c => c.id === clientId ? { ...c, profiles: [...c.profiles, entry] } : c) });
+    setPersonName(""); setProfileNotes("");
+  }
+  async function removeProfile(pid) {
+    await persist({ ...data, clients: data.clients.map(c => c.id === clientId ? { ...c, profiles: c.profiles.filter(p => p.id !== pid) } : c) });
+  }
+
+  const table = data.clients.map(c => {
+    const profilesCount = (c.profiles || []).filter(p => p.date && p.date.startsWith(monthKey(year, monthIdx))).length;
+    const hours = sumActivityHours(c.activities, year, monthIdx) + c.units.reduce((s, u) => s + sumActivityHours(u.activities, year, monthIdx), 0);
+    return { id: c.id, name: c.name, profiles: profilesCount, hours };
+  }).filter(r => r.profiles > 0 || r.hours > 0);
+
+  function buildReport() {
+    return {
+      title: "Perfis e Horas por Empresa",
+      subtitle: monthLabel(monthDate),
+      filename: "perfis-horas-" + monthKey(year, monthIdx),
+      sections: [{ heading: "Por empresa", rows: table.map(r => [r.name, r.profiles + " perfis · " + fmtHours(r.hours)]) }],
+    };
+  }
+
+  return (
+    <div>
+      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", flexWrap: "wrap", gap: 10, marginBottom: 16 }}>
+        <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+          <button onClick={() => setMonthDate(new Date(year, monthIdx - 1, 1))} className="input" style={{ padding: "4px 10px", cursor: "pointer" }}>‹</button>
+          <div className="mono" style={{ fontSize: 13, textTransform: "capitalize", minWidth: 140, textAlign: "center" }}>{monthLabel(monthDate)}</div>
+          <button onClick={() => setMonthDate(new Date(year, monthIdx + 1, 1))} className="input" style={{ padding: "4px 10px", cursor: "pointer" }}>›</button>
+        </div>
+        <ReportButton label="📄 Relatório" buildReport={buildReport} />
+      </div>
+
+      <div className="card" style={{ padding: 14, marginBottom: 18 }}>
+        <div className="mono" style={{ fontSize: 11, color: "#9b9585", marginBottom: 8 }}>REGISTRAR PERFIL PRODUZIDO</div>
+        <div style={{ display: "flex", gap: 8, marginBottom: 8, flexWrap: "wrap" }}>
+          <select className="input" style={{ flex: 1, minWidth: 160 }} value={clientId} onChange={e => setClientId(e.target.value)}>
+            {data.clients.map(c => <option key={c.id} value={c.id}>{c.name}</option>)}
+          </select>
+          <input className="input" style={{ flex: 1, minWidth: 160 }} placeholder="Nome da pessoa" value={personName} onChange={e => setPersonName(e.target.value)} />
+        </div>
+        <input className="input" style={{ width: "100%", marginBottom: 8 }} placeholder="Observações (opcional)" value={profileNotes} onChange={e => setProfileNotes(e.target.value)} />
+        <button type="button" className="btn-gold" style={{ padding: "7px 14px", fontSize: 13, border: "none", cursor: "pointer" }} onClick={addProfile}>+ Registrar perfil</button>
+        {client && (
+          <div style={{ marginTop: 12 }}>
+            {client.profiles.filter(p => p.date.startsWith(monthKey(year, monthIdx))).sort((a, b) => b.date.localeCompare(a.date)).map(p => (
+              <div key={p.id} style={{ display: "flex", justifyContent: "space-between", padding: "5px 0", borderTop: "1px solid var(--line)" }}>
+                <div style={{ fontSize: 12.5 }}>{p.date} — {p.personName}{p.notes ? " (" + p.notes + ")" : ""}</div>
+                <button type="button" onClick={() => removeProfile(p.id)} style={{ background: "none", border: "none", color: "var(--red)", cursor: "pointer", fontSize: 11 }}>remover</button>
+              </div>
+            ))}
+          </div>
+        )}
+      </div>
+
+      <div className="mono" style={{ fontSize: 11, color: "#9b9585", marginBottom: 10 }}>PERFIS E HORAS POR EMPRESA NO MÊS</div>
+      {table.length === 0 && <div style={{ fontSize: 13, color: "#9b9585" }}>Nada registrado neste mês ainda.</div>}
+      {table.map(r => (
+        <div key={r.id} className="card" style={{ padding: "10px 14px", marginBottom: 6, display: "flex", justifyContent: "space-between" }}>
+          <span style={{ fontSize: 13.5, fontWeight: 500 }}>{r.name}</span>
+          <span className="mono" style={{ fontSize: 12.5 }}>{r.profiles} perfis · {fmtHours(r.hours)}</span>
+        </div>
+      ))}
+    </div>
+  );
+}
+
+function HorasEquipeView({ data }) {
+  const [monthDate, setMonthDate] = useState(new Date());
+  const year = monthDate.getFullYear();
+  const monthIdx = monthDate.getMonth();
+
+  const team = [{ id: "director", name: data.director.name }].concat(data.employees.filter(e => e.active).map(e => ({ id: e.id, name: e.name })));
+
+  function hoursFor(personId) {
+    return data.clients.reduce((s, c) => {
+      const own = sumActivityHours(c.activities, year, monthIdx, a => a.responsavel === personId);
+      const units = c.units.reduce((s2, u) => s2 + sumActivityHours(u.activities, year, monthIdx, a => a.responsavel === personId), 0);
+      return s + own + units;
+    }, 0);
+  }
+
+  const rows = team.map(p => ({ name: p.name, horas: Math.round(hoursFor(p.id) * 10) / 10 }));
+
+  return (
+    <div>
+      <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 16 }}>
+        <button onClick={() => setMonthDate(new Date(year, monthIdx - 1, 1))} className="input" style={{ padding: "4px 10px", cursor: "pointer" }}>‹</button>
+        <div className="mono" style={{ fontSize: 13, textTransform: "capitalize", minWidth: 140, textAlign: "center" }}>{monthLabel(monthDate)}</div>
+        <button onClick={() => setMonthDate(new Date(year, monthIdx + 1, 1))} className="input" style={{ padding: "4px 10px", cursor: "pointer" }}>›</button>
+      </div>
+      <p style={{ fontSize: 12.5, color: "#6d6754", marginBottom: 16, maxWidth: 480 }}>
+        Calculado a partir do campo "responsável" nas atividades lançadas em cada empresa/unidade — sem lançar em outro lugar.
+      </p>
+      <div style={{ height: 200, marginBottom: 20 }}>
+        <ResponsiveContainer width="100%" height="100%">
+          <BarChart data={rows}>
+            <CartesianGrid strokeDasharray="3 3" stroke="#E4DFD2" />
+            <XAxis dataKey="name" tick={{ fontSize: 10 }} />
+            <YAxis tick={{ fontSize: 10 }} />
+            <Tooltip formatter={v => fmtHours(v)} />
+            <Bar dataKey="horas" fill="#1B2A4A" radius={[3, 3, 0, 0]} />
+          </BarChart>
+        </ResponsiveContainer>
+      </div>
+      {rows.map(r => (
+        <div key={r.name} className="card" style={{ padding: "10px 14px", marginBottom: 6, display: "flex", justifyContent: "space-between" }}>
+          <span style={{ fontSize: 13.5 }}>{r.name}</span>
+          <span className="mono" style={{ fontSize: 13, fontWeight: 600 }}>{fmtHours(r.horas)}</span>
+        </div>
+      ))}
+    </div>
+  );
+}
+
+function FaturamentoMetaView({ data, persist }) {
+  const now = new Date();
+  const last12 = Array.from({ length: 12 }, (_, i) => {
+    const d = new Date(now.getFullYear(), now.getMonth() - (11 - i), 1);
+    return { label: d.toLocaleDateString("pt-BR", { month: "short", year: "2-digit" }), receita: receitaMensal(data, d.getFullYear(), d.getMonth()) };
+  });
+  const currentMonthRevenue = last12[last12.length - 1].receita;
+  const ytdRevenue = last12.reduce((s, m) => s + m.receita, 0);
+  const meta = data.financas.metaFaturamentoFuturo;
+  const { pct, remaining } = pctRemaining(currentMonthRevenue, meta);
+
+  async function setMeta(v) {
+    await persist({ ...data, financas: { ...data.financas, metaFaturamentoFuturo: v } });
+  }
+
+  return (
+    <div>
+      <div style={{ display: "flex", gap: 14, flexWrap: "wrap", marginBottom: 20 }}>
+        <div className="card" style={{ padding: 14, flex: 1, minWidth: 180 }}>
+          <div className="mono" style={{ fontSize: 10.5, color: "#9b9585" }}>FATURAMENTO ESTE MÊS</div>
+          <div className="mono" style={{ fontSize: 19, fontWeight: 700, color: "var(--navy)" }}>{fmtBRL(currentMonthRevenue)}</div>
+        </div>
+        <div className="card" style={{ padding: 14, flex: 1, minWidth: 180 }}>
+          <div className="mono" style={{ fontSize: 10.5, color: "#9b9585" }}>ACUMULADO 12 MESES</div>
+          <div className="mono" style={{ fontSize: 19, fontWeight: 700, color: "var(--navy)" }}>{fmtBRL(ytdRevenue)}</div>
+        </div>
+        <div className="card" style={{ padding: 14, flex: 1, minWidth: 180 }}>
+          <div className="mono" style={{ fontSize: 10.5, color: "#9b9585" }}>MINHA META FUTURA (mensal)</div>
+          <input className="input" type="number" style={{ width: "100%", marginTop: 4 }} value={meta ?? ""} placeholder="R$" onChange={e => setMeta(e.target.value === "" ? null : Number(e.target.value))} />
+          {meta != null && <div style={{ fontSize: 11.5, color: pct >= 100 ? "var(--green)" : "var(--red)", marginTop: 6 }}>{pct >= 100 ? "🟢" : "🔴"} {pct.toFixed(0)}% da meta · falta {fmtBRL(remaining)}</div>}
+        </div>
+      </div>
+
+      <div className="mono" style={{ fontSize: 11, color: "#9b9585", marginBottom: 8 }}>EVOLUÇÃO DO FATURAMENTO — 12 MESES</div>
+      <div style={{ height: 220 }}>
+        <ResponsiveContainer width="100%" height="100%">
+          <LineChart data={last12}>
+            <CartesianGrid strokeDasharray="3 3" stroke="#E4DFD2" />
+            <XAxis dataKey="label" tick={{ fontSize: 10 }} />
+            <YAxis tick={{ fontSize: 10 }} />
+            <Tooltip formatter={v => fmtBRL(v)} />
+            <Line type="monotone" dataKey="receita" stroke="#B8892B" strokeWidth={2} dot={{ r: 3 }} />
+            {meta != null && <Line type="monotone" dataKey={() => meta} stroke="#1B2A4A" strokeDasharray="4 4" dot={false} name="Meta" />}
+          </LineChart>
+        </ResponsiveContainer>
+      </div>
+    </div>
+  );
+}
+
+function ManagerPortal({ unit, client, onChangeUnit, monthDate, setMonthDate }) {
+  const [tab, setTab] = useState("vendas");
+  const [year, setYear] = useState(currentYear());
+  const [noteMonth, setNoteMonth] = useState(monthKey(currentYear(), new Date().getMonth()));
+  const [noteText, setNoteText] = useState(unit.monthlyNotes?.[noteMonth] || "");
+
+  function changeRevenueMonth(key, value) {
+    const next = { ...unit.revenue };
+    if (value === null) delete next[key]; else next[key] = value;
+    onChangeUnit({ revenue: next });
+  }
+  function selectNoteMonth(m) {
+    setNoteMonth(m);
+    setNoteText(unit.monthlyNotes?.[m] || "");
+  }
+  function saveNote() {
+    onChangeUnit({ monthlyNotes: { ...unit.monthlyNotes, [noteMonth]: noteText } });
+  }
+
+  const vendedores = unit.funcionarios.map(f => ({ ...f, ownerLabel: unit.name, clientId: client?.id, unitId: unit.id }));
+
+  return (
+    <div>
+      <h2 className="disp" style={{ fontSize: 22, margin: 0, color: "var(--navy)" }}>{unit.name}</h2>
+      <p style={{ fontSize: 12.5, color: "#6d6754", margin: "4px 0 16px" }}>{client?.name} · gerência da unidade</p>
+
+      <div style={{ display: "flex", gap: 4, margin: "0 0 18px", borderBottom: "1px solid var(--line)", flexWrap: "wrap" }}>
+        {[["vendas", "Vendas & Metas"], ["pontuacao", "Pontuação da Equipe"], ["faturamento", "Faturamento"], ["atividades", "Atividades"], ["nota", "Nota Mensal"]].map(([k, l]) => (
+          <button key={k} type="button" onClick={() => setTab(k)}
+            style={{ padding: "8px 14px", fontSize: 12.5, background: "none", border: "none", cursor: "pointer", borderBottom: tab === k ? "2px solid var(--gold)" : "2px solid transparent", fontWeight: tab === k ? 600 : 400, color: tab === k ? "var(--navy)" : "#7a7460" }}>
+            {l}
+          </button>
+        ))}
+      </div>
+
+      {tab === "vendas" && (
+        <VendasMetasTab
+          metaMensal={unit.metaMensal} onChangeMeta={v => onChangeUnit({ metaMensal: v })}
+          metaDiaria={unit.metaDiaria} onChangeMetaDiaria={v => onChangeUnit({ metaDiaria: v })}
+          metaSemanal={unit.metaSemanal} onChangeMetaSemanal={v => onChangeUnit({ metaSemanal: v })}
+          funcionarios={unit.funcionarios} onChangeFuncionarios={list => onChangeUnit({ funcionarios: list })}
+          monthDate={monthDate} setMonthDate={setMonthDate} label={unit.name}
+        />
+      )}
+
+      {tab === "pontuacao" && (
+        <PontuacaoBoard
+          vendedores={vendedores}
+          onUpdateVendedor={(v, patch) => onChangeUnit({ funcionarios: unit.funcionarios.map(f => f.id === v.id ? { ...f, ...patch } : f) })}
+          canEdit={true}
+          title="Pontuação da minha equipe"
+          subtitle="Você é superior desta unidade — pode lançar pontos. O funcionário do mês sai automático de quem mais pontua."
+        />
+      )}
+
+      {tab === "faturamento" && (
+        <RevenueChart revenue={unit.revenue} onChangeMonth={changeRevenueMonth} year={year} setYear={setYear} />
+      )}
+
+      {tab === "atividades" && (
+        <ActivitiesManager activities={unit.activities} onChange={list => onChangeUnit({ activities: list })} />
+      )}
+
+      {tab === "nota" && (
+        <div>
+          <div className="mono" style={{ fontSize: 11, color: "#9b9585", marginBottom: 8 }}>NOTA MENSAL DA GERÊNCIA</div>
+          <input className="input" type="month" style={{ marginBottom: 8 }} value={noteMonth} onChange={e => selectNoteMonth(e.target.value)} />
+          <textarea className="input" style={{ width: "100%", minHeight: 90, marginBottom: 8 }} value={noteText} onChange={e => setNoteText(e.target.value)} placeholder="Avaliação do mês, dificuldades, plano de ação…" />
+          <button type="button" className="btn-primary" style={{ padding: "7px 14px", fontSize: 13 }} onClick={saveNote}>Salvar nota do mês</button>
+        </div>
+      )}
+    </div>
+  );
+}
+
+const root = ReactDOM.createRoot(document.getElementById("root"));
+root.render(<App />);
+</script>
+</body>
+</html>
